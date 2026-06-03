@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jot-config
+  namespace: workloads
+data:
+  PG_URL: "postgresql://jot:jot@aegis-pg-rw.postgres.svc:5432/jot?sslmode=disable"
+  OLLAMA_URL: "http://ollama.ai.svc.cluster.local:11434"
+  OLLAMA_MODEL: "mistral:7b"

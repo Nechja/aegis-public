@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: summon
+  namespace: workloads
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: summon
+  template:
+    metadata:
+      labels:
+        app: summon
+      annotations:
+        linkerd.io/inject: disabled
+    spec:
+      serviceAccountName: summon
+      automountServiceAccountToken: true
+      # Give the .NET host time to checkpoint LiteDB before SIGKILL on shutdown.
+      terminationGracePeriodSeconds: 60
+      # Pinned to a specific host in the private cluster (real hostname omitted).
+      # Replace with your own node, or remove the nodeSelector to schedule freely.
+      nodeSelector:
+        kubernetes.io/hostname: example-node
+      imagePullSecrets:
+        - name: ghcr-pull
+      initContainers:
+        - name: fix-permissions
+          image: busybox:latest
+          command: ["sh", "-c", "chown 1654:1654 /data"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      containers:
+        - name: summon
+          image: ghcr.io/nechja/summon:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: LITEDB_PATH
+              value: "/data/summon.db"
+            - name: KUBERNETES_NAMESPACE
+              value: "vms"
+            - name: TAILSCALE_DOMAIN
+              value: "example.ts.net"
+            - name: MINIO_URL
+              value: "http://minio.minio.svc.cluster.local:9000"
+            - name: MINIO_BUCKET
+              value: "vm-images"
+            - name: RABBITMQ_HOST
+              value: "rabbitmq.rabbitmq.svc.cluster.local"
+            - name: RABBITMQ_PORT
+              value: "5672"
+            - name: RABBITMQ_USER
+              valueFrom:
+                secretKeyRef:
+                  name: summon-rabbitmq
+                  key: RABBITMQ_USER
+            - name: RABBITMQ_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: summon-rabbitmq
+                  key: RABBITMQ_PASS
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            failureThreshold: 10
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: summon-data
+        - name: tmp
+          emptyDir: {}

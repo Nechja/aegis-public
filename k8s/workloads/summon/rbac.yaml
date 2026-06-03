@@ -1,0 +1,42 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: summon-vm-manager
+rules:
+  # KubeVirt VM lifecycle
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachineinstances"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Instance types (read-only, for size picker)
+  - apiGroups: ["instancetype.kubevirt.io"]
+    resources: ["virtualmachineclusterinstancetypes"]
+    verbs: ["get", "list"]
+  # CDI DataVolumes for disk images
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Services for Tailscale LoadBalancer per VM
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Events for status monitoring
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch"]
+  # Pods for VM status
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: summon-vm-manager
+subjects:
+  - kind: ServiceAccount
+    name: summon
+    namespace: workloads
+roleRef:
+  kind: ClusterRole
+  name: summon-vm-manager
+  apiGroup: rbac.authorization.k8s.io

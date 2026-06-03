@@ -1,0 +1,27 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aegis-dashboard-reader
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: aegis-dashboard-reader
+subjects:
+  - kind: ServiceAccount
+    name: aegis-dashboard
+    namespace: workloads
+roleRef:
+  kind: ClusterRole
+  name: aegis-dashboard-reader
+  apiGroup: rbac.authorization.k8s.io

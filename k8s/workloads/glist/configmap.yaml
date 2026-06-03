@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: glist-config
+  namespace: workloads
+data:
+  PG_URL: "postgresql://glist:glist@aegis-pg-rw.postgres.svc:5432/glist?sslmode=disable"
+  OLLAMA_URL: "http://ollama.ai.svc.cluster.local:11434"
+  OLLAMA_MODEL: "mistral:7b"

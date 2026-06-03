@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dashboard
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    argocd-image-updater.argoproj.io/image-list: dashboard=ghcr.io/nechja/aegis-dashboard
+    argocd-image-updater.argoproj.io/dashboard.update-strategy: newest-build
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Nechja/aegis-public.git
+    targetRevision: main
+    path: k8s/workloads/dashboard
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: workloads
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

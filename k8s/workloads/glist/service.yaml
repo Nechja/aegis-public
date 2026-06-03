@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: glist
+  namespace: workloads
+spec:
+  selector:
+    app: glist
+  ports:
+    - port: 80
+      targetPort: http
+      name: http

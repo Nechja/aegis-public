@@ -8,7 +8,7 @@
 Aegis is a multi-arch (x86 + ARM) k3s homelab. The full private project includes cluster infrastructure, networking, storage, GitOps, and application workloads. This repository is a sanitized public mirror focused on first-party applications. It includes a VM provisioner, a live cluster dashboard, and two self-hosted tools.
 
 > **About this repo.** This is a sanitized public mirror of a private homelab.
-> The infrastructure layer (cluster manifests, secrets, node inventory, host and network details) is intentionally private. This repository contains application code with internal hostnames replaced by placeholders, published with a fresh standalone history. So there are some high odds it won't work out of the box.
+> The infrastructure layer (cluster-wide manifests, secrets, node inventory, host and network details) is intentionally private. This repository contains application code plus the per-app Kubernetes manifests under `k8s/`, with internal hostnames replaced by placeholders and secrets omitted, published with a fresh standalone history. So there are some high odds it won't work out of the box.
 
 ---
 

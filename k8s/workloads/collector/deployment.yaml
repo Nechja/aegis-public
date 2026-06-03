@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegis-collector
+  namespace: workloads
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aegis-collector
+  template:
+    metadata:
+      labels:
+        app: aegis-collector
+      annotations:
+        linkerd.io/inject: disabled
+    spec:
+      serviceAccountName: aegis-collector
+      automountServiceAccountToken: true
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: collector
+          image: ghcr.io/nechja/aegis-collector:latest
+          ports:
+            - containerPort: 8081
+              name: health
+          env:
+            - name: TAILSCALE_DOMAIN
+              value: "example.ts.net"
+            - name: REDIS_SENTINEL_ADDR
+              value: "rfs-aegis.redis.svc.cluster.local:26379"
+            - name: REDIS_MASTER_NAME
+              value: "mymaster"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            failureThreshold: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 60
+            failureThreshold: 3
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
