@@ -1,0 +1,99 @@
+@page "/templates"
+@inject Summon.Services.Data.SummonDb Db
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Summon — Templates</PageTitle>
+
+<MudStack Row Wrap="Wrap.Wrap" AlignItems="AlignItems.End" Justify="Justify.SpaceBetween" Spacing="3" Class="mb-5">
+    <MudStack Spacing="0">
+        <MudText Typo="Typo.overline" Class="mud-text-secondary">CATALOG</MudText>
+        <MudText Typo="Typo.h5" Style="font-weight: 600; letter-spacing: -0.02em;">
+            @_templates.Count templates
+        </MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Base images, sizing floors, and provisioning gates. Edit a row to override.
+        </MudText>
+    </MudStack>
+</MudStack>
+
+<MudPaper Elevation="0" Outlined Class="rounded-lg" Style="overflow: hidden;">
+    <MudStack Row AlignItems="AlignItems.Center" Class="px-4 py-2"
+              Style="border-bottom: 1px solid var(--mud-palette-divider); background: color-mix(in srgb, var(--mud-palette-background) 85%, var(--mud-palette-action-default-hover));">
+        <MudText Class="aegis-mono" Style="flex: 2 1 220px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary);">name · image</MudText>
+        <MudText Class="aegis-mono" Style="flex: 0 0 80px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary);">os</MudText>
+        <MudText Class="aegis-mono" Style="flex: 0 0 80px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary);">arch</MudText>
+        <MudText Class="aegis-mono" Style="flex: 0 0 140px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary);">floors</MudText>
+        <MudText Class="aegis-mono" Style="flex: 0 0 110px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary); text-align: center;">enabled</MudText>
+        <div style="width: 40px;"></div>
+    </MudStack>
+
+    @foreach (var t in _templates)
+    {
+        <MudStack Row AlignItems="AlignItems.Center" Class="px-4 py-3" Style="border-bottom: 1px solid var(--mud-palette-divider);">
+            <MudStack Spacing="0" Style="flex: 2 1 220px; min-width: 0;">
+                <Mono>@t.Name</Mono>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary aegis-mono"
+                         Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    @t.BaseImage
+                </MudText>
+            </MudStack>
+            <div style="flex: 0 0 80px;">
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                         Color="@(t.OsFamily == TemplateOsFamilies.Windows ? Color.Info : Color.Success)">
+                    @(t.OsFamily == TemplateOsFamilies.Windows ? "Windows" : "Linux")
+                </MudChip>
+            </div>
+            <Mono Class="mud-text-secondary" Style="flex: 0 0 80px;">@t.Arch</Mono>
+            <Mono Class="mud-text-secondary" Style="flex: 0 0 140px;">
+                @t.MinCpu c · @t.MinMemoryGb G · @t.MinDiskGb G disk
+            </Mono>
+            <div style="flex: 0 0 110px; text-align: center;" @onclick:stopPropagation="true">
+                <MudSwitch T="bool"
+                           Value="@t.ProvisioningEnabled"
+                           ValueChanged="@(v => ToggleProvisioning(t, v))"
+                           Color="Color.Primary" Size="Size.Small" />
+            </div>
+            <div style="width: 40px; text-align: right;">
+                <MudIconButton Icon="@Icons.Material.Outlined.Edit" Size="Size.Small"
+                               OnClick="@(() => OpenEdit(t))" />
+            </div>
+        </MudStack>
+    }
+</MudPaper>
+
+@code {
+    private List<VmTemplate> _templates = [];
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _templates = Db.Templates.FindAll().OrderBy(t => t.Name).ToList();
+    }
+
+    private void ToggleProvisioning(VmTemplate t, bool enabled)
+    {
+        var updated = t with { ProvisioningEnabled = enabled };
+        Db.Templates.Update(updated);
+        Snackbar.Add($"{t.Name} provisioning {(enabled ? "enabled" : "disabled")}", Severity.Info);
+        Reload();
+    }
+
+    private async Task OpenEdit(VmTemplate t)
+    {
+        var parameters = new DialogParameters<TemplateEditDialog>
+        {
+            { x => x.Template, t }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<TemplateEditDialog>($"Edit {t.Name}", parameters, options);
+        var result = await dialog.Result;
+        if (result is { Canceled: false, Data: VmTemplate updated })
+        {
+            Db.Templates.Update(updated);
+            Snackbar.Add($"Updated {updated.Name}", Severity.Success);
+            Reload();
+        }
+    }
+}

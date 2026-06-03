@@ -1,0 +1,42 @@
+@import './lib/fonts/fonts.css';
+@import './lib/variables.css';
+
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+body {
+	font-family: var(--font);
+	background: var(--bg-canvas);
+	color: var(--text-primary);
+	min-height: 100vh;
+	position: relative;
+}
+
+/* scanline overlay */
+body::after {
+	content: '';
+	position: fixed;
+	inset: 0;
+	background: repeating-linear-gradient(
+		0deg,
+		transparent,
+		transparent 2px,
+		rgba(0, 0, 0, 0.08) 2px,
+		rgba(0, 0, 0, 0.08) 4px
+	);
+	pointer-events: none;
+	z-index: 9999;
+}
+
+a {
+	color: var(--neon-cyan);
+	text-decoration: none;
+}
+
+::selection {
+	background: var(--neon-pink);
+	color: var(--bg-canvas);
+}

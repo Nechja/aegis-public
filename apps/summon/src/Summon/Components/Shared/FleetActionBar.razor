@@ -1,0 +1,51 @@
+@namespace Summon.Components.Shared
+
+<MudPaper Elevation="2" Outlined Class="rounded-lg pa-3">
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.body2" Style="font-weight: 500;">
+            @SelectedCount selected
+        </MudText>
+        <MudDivider Vertical FlexItem />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.SystemUpdate"
+                   OnClick="OnUpgrade" Disabled="@Busy">
+            Upgrade
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.Add"
+                   OnClick="OnInstall" Disabled="@Busy">
+            Install…
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.DeleteForever"
+                   OnClick="OnUninstall" Disabled="@Busy">
+            Uninstall…
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.Refresh"
+                   OnClick="OnRefreshApps" Disabled="@Busy">
+            Refresh Apps
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                   StartIcon="@Icons.Material.Outlined.Terminal"
+                   OnClick="OnExec" Disabled="@Busy">
+            Exec…
+        </MudButton>
+        <MudSpacer />
+        <MudButton Variant="Variant.Text" Size="Size.Small"
+                   OnClick="OnClear" Disabled="@Busy">
+            Clear
+        </MudButton>
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter] public int SelectedCount { get; set; }
+    [Parameter] public EventCallback OnUpgrade { get; set; }
+    [Parameter] public EventCallback OnInstall { get; set; }
+    [Parameter] public EventCallback OnUninstall { get; set; }
+    [Parameter] public EventCallback OnRefreshApps { get; set; }
+    [Parameter] public EventCallback OnExec { get; set; }
+    [Parameter] public EventCallback OnClear { get; set; }
+    [Parameter] public bool Busy { get; set; }
+}

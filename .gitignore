@@ -1,0 +1,17 @@
+# build artifacts
+node_modules/
+**/build/
+**/.svelte-kit/
+bin/
+obj/
+*.dll
+
+# go
+**/summon-agent
+!**/summon-agent/
+
+# os / editor
+.DS_Store
+Thumbs.db
+*~
+*.swp

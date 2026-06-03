@@ -1,0 +1,123 @@
+@namespace Summon.Components.Shared
+@implements IDisposable
+@inject Summon.Services.FleetOperationService FleetOps
+@inject Summon.Services.VmStateNotifier Notifier
+
+<MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight"
+         ActivationEvent="@MouseEvent.LeftClick" Dense>
+    <ActivatorContent>
+        @{
+            var inFlight = _active.Count;
+            var muted = inFlight == 0;
+        }
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1"
+                  Style="@($"padding: 4px 10px; border: 1px solid var(--mud-palette-divider); border-radius: 999px; cursor: pointer;{(muted ? " opacity: 0.5;" : "")}")">
+            <MudIcon Icon="@Icons.Material.Outlined.Bolt" Size="Size.Small"
+                     Color="@(muted ? Color.Default : Color.Primary)" />
+            <MudText Class="aegis-mono" Style="font-size: 0.75rem; color: var(--mud-palette-text-secondary);">
+                @(inFlight > 0 ? $"{inFlight} ops" : "ops")
+            </MudText>
+        </MudStack>
+    </ActivatorContent>
+    <ChildContent>
+        <div style="min-width: 360px; max-width: 460px;">
+            <MudStack Spacing="0" Class="pa-3">
+                <MudText Typo="Typo.subtitle2">Fleet operations</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    @(_active.Count == 0 ? "nothing in flight" : $"{_active.Count} active")
+                </MudText>
+            </MudStack>
+            <MudDivider />
+            @if (_display.Count == 0)
+            {
+                <div class="pa-4" style="text-align: center;">
+                    <MudIcon Icon="@Icons.Material.Outlined.CheckCircle" Size="Size.Medium" Style="opacity: 0.3;" />
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">No recent operations.</MudText>
+                </div>
+            }
+            else
+            {
+                @foreach (var op in _display)
+                {
+                    var total = op.Targets.Count;
+                    var done = op.Targets.Count(t =>
+                        t.Phase == FleetOperationTargetPhase.Done ||
+                        t.Phase == FleetOperationTargetPhase.Failed ||
+                        t.Phase == FleetOperationTargetPhase.Abandoned);
+                    var inFlight = op.CompletedAt is null;
+
+                    <div class="pa-3">
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                            <MudIcon Icon="@(inFlight ? Icons.Material.Outlined.Sync : Icons.Material.Outlined.CheckCircle)"
+                                     Size="Size.Small"
+                                     Color="@(inFlight ? Color.Info : Color.Success)"
+                                     Class="@(inFlight ? "mud-icon-rotate" : "")" />
+                            <MudStack Spacing="0" Style="flex-grow: 1; min-width: 0;">
+                                <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@op.Kind</MudText>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                        @op.Summary
+                                    </MudText>
+                                </MudStack>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                    @done/@total done · @Humanize(op.StartedAt)
+                                </MudText>
+                            </MudStack>
+                        </MudStack>
+                    </div>
+                    <MudDivider />
+                }
+            }
+            <div class="pa-2" style="text-align: right;">
+                <MudLink Href="/operations" Typo="Typo.caption" Underline="Underline.Hover">
+                    All operations →
+                </MudLink>
+            </div>
+        </div>
+    </ChildContent>
+</MudMenu>
+
+@code {
+    private IReadOnlyList<FleetOperation> _active = [];
+    private IReadOnlyList<FleetOperation> _display = [];
+    private IDisposable? _subscription;
+    private System.Threading.Timer? _tick;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+
+        _subscription = Notifier.Subscribe(_ =>
+        {
+            Refresh();
+            return InvokeAsync(StateHasChanged);
+        });
+
+        _tick = new System.Threading.Timer(_ =>
+        {
+            Refresh();
+            InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
+
+    private void Refresh()
+    {
+        _active = FleetOps.ActiveOperations();
+        _display = FleetOps.RecentOperations(6);
+    }
+
+    private static string Humanize(DateTime ts)
+    {
+        var delta = DateTime.UtcNow - ts;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
+    }
+
+    public void Dispose()
+    {
+        _subscription?.Dispose();
+        _tick?.Dispose();
+    }
+}

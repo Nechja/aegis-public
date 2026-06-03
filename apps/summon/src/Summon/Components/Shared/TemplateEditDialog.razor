@@ -1,0 +1,81 @@
+@namespace Summon.Components.Shared
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="3">
+            <MudTextField @bind-Value="_baseImage" Label="Base image (MinIO key)" Variant="Variant.Outlined"
+                          HelperText="Object name in the vm-images bucket (e.g. noble-server-cloudimg-amd64.img)" />
+            <MudStack Row Spacing="2">
+                <MudSelect T="string" @bind-Value="_osFamily" Label="OS family" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@TemplateOsFamilies.Linux">Linux</MudSelectItem>
+                    <MudSelectItem Value="@TemplateOsFamilies.Windows">Windows</MudSelectItem>
+                </MudSelect>
+                <MudSelect T="string" @bind-Value="_arch" Label="Arch" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@("amd64")">amd64</MudSelectItem>
+                    <MudSelectItem Value="@("arm64")">arm64</MudSelectItem>
+                </MudSelect>
+            </MudStack>
+            <MudStack Row Spacing="2">
+                <MudNumericField T="int" @bind-Value="_minCpu" Label="Min CPU" Min="1" Max="32"
+                                 Variant="Variant.Outlined" />
+                <MudNumericField T="int" @bind-Value="_minMemoryGb" Label="Min RAM (GiB)" Min="1" Max="128"
+                                 Variant="Variant.Outlined" />
+                <MudNumericField T="int" @bind-Value="_minDiskGb" Label="Min disk (GiB)" Min="5" Max="1000" Step="5"
+                                 Variant="Variant.Outlined" />
+            </MudStack>
+            <MudSwitch T="bool" @bind-Value="_provisioningEnabled" Color="Color.Primary"
+                       Label="Provisioning enabled (summons will be allowed)" />
+            <MudTextField @bind-Value="_baseCloudInit" Label="Base cloud-init"
+                          Variant="Variant.Outlined" Lines="8" Class="aegis-mono"
+                          HelperText="Prepended before per-VM userdata. Leave empty for none." />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public VmTemplate Template { get; set; } = default!;
+
+    private string _baseImage = "";
+    private string _osFamily = TemplateOsFamilies.Linux;
+    private string _arch = "amd64";
+    private int _minCpu = 1;
+    private int _minMemoryGb = 1;
+    private int _minDiskGb = 10;
+    private bool _provisioningEnabled = true;
+    private string _baseCloudInit = "";
+
+    protected override void OnInitialized()
+    {
+        _baseImage = Template.BaseImage;
+        _osFamily = Template.OsFamily;
+        _arch = Template.Arch;
+        _minCpu = Template.MinCpu;
+        _minMemoryGb = Template.MinMemoryGb;
+        _minDiskGb = Template.MinDiskGb;
+        _provisioningEnabled = Template.ProvisioningEnabled;
+        _baseCloudInit = Template.BaseCloudInit;
+    }
+
+    private void Cancel() => Dialog.Cancel();
+
+    private void Save()
+    {
+        var updated = Template with
+        {
+            BaseImage = _baseImage.Trim(),
+            OsFamily = _osFamily,
+            Arch = _arch,
+            MinCpu = _minCpu,
+            MinMemoryGb = _minMemoryGb,
+            MinDiskGb = _minDiskGb,
+            ProvisioningEnabled = _provisioningEnabled,
+            BaseCloudInit = _baseCloudInit
+        };
+        Dialog.Close(DialogResult.Ok(updated));
+    }
+}

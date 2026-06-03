@@ -1,0 +1,401 @@
+@page "/"
+@implements IDisposable
+@inject Summon.Services.Data.SummonDb Db
+@inject Summon.Services.VmStateNotifier Notifier
+@inject Summon.Services.FleetSnapshot Fleet
+@inject Summon.Services.FleetOperationService FleetOps
+@inject IConfiguration Config
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject Summon.Services.IdentityService Identity
+
+<PageTitle>Summon — Fleet</PageTitle>
+
+<MudStack Row Wrap="Wrap.Wrap" AlignItems="AlignItems.End" Justify="Justify.SpaceBetween" Spacing="3" Class="mb-5">
+    <MudStack Spacing="0" Style="min-width: 0;">
+        <MudText Typo="Typo.overline" Class="mud-text-secondary">FLEET</MudText>
+        <MudText Typo="Typo.h5" Style="font-weight: 600; letter-spacing: -0.02em;">
+            @(_vms.Count == 0 ? "No summons" : $"{_vms.Count} summon{(_vms.Count == 1 ? "" : "s")}")
+        </MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            @FleetSubtitle()
+        </MudText>
+    </MudStack>
+    <MudStack Row Spacing="1" AlignItems="AlignItems.Center">
+        @{
+            var pendingVms = _vms
+                .Where(v => v.State == VmState.Running
+                            && ((v.PendingAptUpdates ?? 0) + (v.PendingSnapRefreshes ?? 0)) > 0)
+                .ToList();
+            var anySecurity = pendingVms.Any(v => (v.PendingSecurityUpdates ?? 0) > 0);
+        }
+        @if (pendingVms.Count > 0)
+        {
+            <MudTooltip Text="@($"Run apt upgrade on {pendingVms.Count} VM{(pendingVms.Count == 1 ? "" : "s")} with pending updates")" Placement="Placement.Bottom">
+                <MudButton Variant="Variant.Outlined" Size="Size.Medium"
+                           Color="@(anySecurity ? Color.Error : Color.Warning)"
+                           StartIcon="@Icons.Material.Outlined.SystemUpdate"
+                           OnClick="UpgradePending" Disabled="_fleetBusy">
+                    Upgrade @(pendingVms.Count) pending
+                </MudButton>
+            </MudTooltip>
+        }
+        <MudTooltip Text="@SshKeyTooltip" Placement="Placement.Bottom">
+            <MudButton Variant="Variant.Outlined" Size="Size.Medium"
+                       StartIcon="@Icons.Material.Outlined.Key"
+                       Href="/api/identity/ssh">
+                SSH key
+            </MudButton>
+        </MudTooltip>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Outlined.AutoAwesome"
+                   Href="/summon">Summon VM</MudButton>
+    </MudStack>
+</MudStack>
+
+@if (_selected.Count > 0)
+{
+    <div style="position: sticky; top: 64px; z-index: 5; margin-bottom: 16px;">
+        <FleetActionBar SelectedCount="_selected.Count"
+                        Busy="_fleetBusy"
+                        OnUpgrade="OnUpgrade"
+                        OnInstall="OnInstall"
+                        OnUninstall="OnUninstall"
+                        OnRefreshApps="OnRefreshApps"
+                        OnExec="OnExec"
+                        OnClear="OnClear" />
+    </div>
+}
+
+@if (_vms.Count == 0)
+{
+    <MudPaper Elevation="0" Outlined Class="pa-8 rounded-lg" Style="text-align: center;">
+        <MudIcon Icon="@Icons.Material.Outlined.Hub" Size="Size.Large" Class="mb-3" Style="opacity: 0.3;" />
+        <MudText Typo="Typo.h6" Class="mb-2">No VMs yet</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
+            Summon one to stand up a dev box — accessible over Tailscale, disposable when you're done.
+        </MudText>
+        <MudButton Variant="Variant.Outlined" Href="/summon" StartIcon="@Icons.Material.Outlined.AutoAwesome">
+            Summon your first VM
+        </MudButton>
+    </MudPaper>
+}
+else
+{
+    <MudPaper Elevation="0" Outlined Class="rounded-lg" Style="overflow: hidden;">
+        <MudStack Row AlignItems="AlignItems.Center" Class="px-4 py-2"
+                  Style="border-bottom: 1px solid var(--mud-palette-divider); background: color-mix(in srgb, var(--mud-palette-background) 85%, var(--mud-palette-action-default-hover));">
+            <div style="width: 36px;"></div>
+            <div style="width: 20px;"></div>
+            <MudText Class="aegis-mono" Style="flex: 2 1 240px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary);">name · template</MudText>
+            <MudText Class="aegis-mono" Style="flex: 0 0 90px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary);">size</MudText>
+            <MudText Class="aegis-mono" Style="flex: 1 1 220px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary);">software</MudText>
+            <MudText Class="aegis-mono" Style="flex: 0 0 110px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--mud-palette-text-secondary); text-align: right;">expires</MudText>
+            <div style="width: 40px;"></div>
+        </MudStack>
+
+        @foreach (var vm in _vms)
+        {
+            <div class="aegis-row-hover" style="border-bottom: 1px solid var(--mud-palette-divider);" @onclick="@(() => Open(vm))">
+                <MudStack Row AlignItems="AlignItems.Center" Class="px-4 py-3">
+                    <div style="width: 36px; display: flex; align-items: center;" @onclick:stopPropagation="true">
+                        <MudCheckBox T="bool"
+                                     Value="@_selected.Contains(vm.Id)"
+                                     ValueChanged="@(v => ToggleSelected(vm.Id, v))"
+                                     Dense Size="Size.Small" Color="Color.Primary" />
+                    </div>
+                    <div style="width: 20px; display: flex; align-items: center;">
+                        <StateDot State="@vm.State" Size="10" />
+                    </div>
+                    <MudStack Spacing="0" Style="flex: 2 1 240px; min-width: 0;">
+                        <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+                            <Mono Class="aegis-mono">@vm.Name</Mono>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.04em;">
+                                @vm.State
+                            </MudText>
+                        </MudStack>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                            @vm.TemplateName · @Age(vm.CreatedAt) old
+                        </MudText>
+                    </MudStack>
+                    <MudStack Spacing="0" Style="flex: 0 0 90px;">
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary aegis-mono">
+                            @vm.InstanceType
+                        </MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary aegis-mono" Style="opacity: 0.7;">
+                            @(vm.DiskGb > 0 ? $"{vm.DiskGb}G disk" : "—")
+                        </MudText>
+                    </MudStack>
+                    <div style="flex: 1 1 220px;">
+                        @RenderSoftware(vm)
+                    </div>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary aegis-mono" Style="flex: 0 0 110px; text-align: right;">
+                        @(vm.ExpiresAt.HasValue ? TimeLeft(vm.ExpiresAt.Value) : "—")
+                    </MudText>
+                    <div style="width: 40px; text-align: right;">
+                        <MudIconButton Icon="@Icons.Material.Outlined.ChevronRight" Size="Size.Small" />
+                    </div>
+                </MudStack>
+            </div>
+        }
+    </MudPaper>
+}
+
+@code {
+    private List<VmRecord> _vms = [];
+    private string _tailscaleDomain = string.Empty;
+    private IDisposable? _subscription;
+    private readonly HashSet<Guid> _selected = [];
+    private bool _fleetBusy = false;
+
+    private string SshKeyTooltip =>
+        $"{Identity.Current.FingerprintSha256} · click to download (save to ~/.ssh/summon_aegis, chmod 600)";
+
+    private void ToggleSelected(Guid id, bool selected)
+    {
+        if (selected) _selected.Add(id);
+        else _selected.Remove(id);
+    }
+
+    private async Task OnUpgrade()
+    {
+        if (_selected.Count == 0) return;
+        _fleetBusy = true;
+        try
+        {
+            var targets = _selected.ToList();
+            await FleetOps.StartUpgrade(targets);
+            Snackbar.Add($"Upgrade queued on {targets.Count} VM{(targets.Count == 1 ? "" : "s")}", Severity.Success);
+            _selected.Clear();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Upgrade failed to start: {ex.Message}", Severity.Error);
+        }
+        finally { _fleetBusy = false; }
+    }
+
+    private async Task OnRefreshApps()
+    {
+        if (_selected.Count == 0) return;
+        _fleetBusy = true;
+        try
+        {
+            var targets = _selected.ToList();
+            await FleetOps.StartRefreshApps(targets);
+            Snackbar.Add($"Refresh queued on {targets.Count} VM{(targets.Count == 1 ? "" : "s")}", Severity.Info);
+            _selected.Clear();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Refresh failed to start: {ex.Message}", Severity.Error);
+        }
+        finally { _fleetBusy = false; }
+    }
+
+    private async Task OnInstall()
+    {
+        if (_selected.Count == 0) return;
+        var targets = _selected.ToList();
+        var parameters = new DialogParameters<FleetInstallDialog>
+        {
+            { x => x.TargetVmIds, (IReadOnlyList<Guid>)targets },
+            { x => x.TargetCount, targets.Count }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<FleetInstallDialog>("Install software", parameters, options);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) _selected.Clear();
+    }
+
+    private async Task OnUninstall()
+    {
+        if (_selected.Count == 0) return;
+        var targets = _selected.ToList();
+        var parameters = new DialogParameters<FleetUninstallDialog>
+        {
+            { x => x.TargetVmIds, (IReadOnlyList<Guid>)targets },
+            { x => x.TargetCount, targets.Count }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<FleetUninstallDialog>("Uninstall software", parameters, options);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) _selected.Clear();
+    }
+
+    private async Task UpgradePending()
+    {
+        var pending = _vms
+            .Where(v => v.State == VmState.Running
+                        && ((v.PendingAptUpdates ?? 0) + (v.PendingSnapRefreshes ?? 0)) > 0)
+            .Select(v => v.Id)
+            .ToList();
+        if (pending.Count == 0) return;
+
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Upgrade VMs with pending updates?",
+            $"Run apt upgrade on {pending.Count} VM{(pending.Count == 1 ? "" : "s")}. This may take a while per VM.",
+            yesText: "Upgrade", cancelText: "Cancel");
+        if (confirmed != true) return;
+
+        _fleetBusy = true;
+        try
+        {
+            await FleetOps.StartUpgrade(pending);
+            Snackbar.Add($"Upgrade queued on {pending.Count} VM{(pending.Count == 1 ? "" : "s")}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Upgrade failed to start: {ex.Message}", Severity.Error);
+        }
+        finally { _fleetBusy = false; }
+    }
+
+    private async Task OnExec()
+    {
+        if (_selected.Count == 0) return;
+        var targets = _selected.ToList();
+        var parameters = new DialogParameters<FleetExecDialog>
+        {
+            { x => x.TargetVmIds, (IReadOnlyList<Guid>)targets },
+            { x => x.TargetCount, targets.Count }
+        };
+        var options = new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true, CloseOnEscapeKey = true };
+        var dialog = await DialogService.ShowAsync<FleetExecDialog>("Run command", parameters, options);
+        var result = await dialog.Result;
+        if (result is not null && !result.Canceled) _selected.Clear();
+    }
+
+    private void OnClear() => _selected.Clear();
+
+    protected override void OnInitialized()
+    {
+        _tailscaleDomain = Config["TAILSCALE_DOMAIN"] ?? "example.ts.net";
+        _vms = Db.Vms.FindAll().OrderByDescending(v => v.CreatedAt).ToList();
+
+        _subscription = Notifier.Subscribe(evt =>
+        {
+            _vms = Db.Vms.FindAll().OrderByDescending(v => v.CreatedAt).ToList();
+            return InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private void Open(VmRecord vm) => Nav.NavigateTo($"/vm/{vm.Id}");
+
+    private RenderFragment RenderSoftware(VmRecord vm) => builder =>
+    {
+        if (vm.SoftwareInstalls is { Count: > 0 } list)
+        {
+            var ok = list.Count(x => x.Phase == PackageInstallPhase.Installed);
+            var failed = list.Count(x => x.Phase == PackageInstallPhase.Failed);
+            var pending = list.Count(x => x.Phase is PackageInstallPhase.Pending or PackageInstallPhase.Installing);
+
+            var seq = 0;
+            builder.OpenElement(seq++, "div");
+            builder.AddAttribute(seq++, "style", "display:flex;gap:4px;align-items:center;");
+
+            AddPill(builder, ref seq, ok.ToString(), "ok", "var(--mud-palette-success)");
+            if (pending > 0) AddPill(builder, ref seq, pending.ToString(), "pending", "var(--mud-palette-warning)");
+            if (failed > 0) AddPill(builder, ref seq, failed.ToString(), "failed", "var(--mud-palette-error)");
+
+            builder.OpenComponent<MudText>(seq++);
+            builder.AddAttribute(seq++, "Typo", Typo.caption);
+            builder.AddAttribute(seq++, "Class", "mud-text-secondary");
+            builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(b =>
+            {
+                b.AddContent(0, $"/{list.Count} packages");
+            }));
+            builder.CloseComponent();
+
+            AddUpdatesPill(builder, ref seq, vm);
+
+            builder.CloseElement();
+        }
+        else if (vm.Packages.Count > 0)
+        {
+            builder.OpenComponent<MudText>(0);
+            builder.AddAttribute(1, "Typo", Typo.caption);
+            builder.AddAttribute(2, "Class", "mud-text-secondary aegis-mono");
+            builder.AddAttribute(3, "ChildContent", (RenderFragment)(b =>
+            {
+                b.AddContent(0, Truncate(string.Join(" · ", vm.Packages), 40));
+            }));
+            builder.CloseComponent();
+        }
+        else
+        {
+            builder.OpenComponent<MudText>(0);
+            builder.AddAttribute(1, "Typo", Typo.caption);
+            builder.AddAttribute(2, "Class", "mud-text-secondary");
+            builder.AddAttribute(3, "ChildContent", (RenderFragment)(b => b.AddContent(0, "—")));
+            builder.CloseComponent();
+        }
+    };
+
+    private static void AddPill(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, ref int seq, string value, string tooltip, string color)
+    {
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "title", tooltip);
+        builder.AddAttribute(seq++, "class", "aegis-mono");
+        builder.AddAttribute(seq++, "style", $"display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:4px;background:color-mix(in srgb, {color} 18%, transparent);color:{color};font-size:0.7rem;font-weight:500;");
+        builder.AddContent(seq++, value);
+        builder.CloseElement();
+    }
+
+    private static void AddUpdatesPill(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder, ref int seq, VmRecord vm)
+    {
+        var apt = vm.PendingAptUpdates ?? 0;
+        var snap = vm.PendingSnapRefreshes ?? 0;
+        var sec = vm.PendingSecurityUpdates ?? 0;
+        if (apt + snap == 0) return;
+
+        var color = sec > 0 ? "var(--mud-palette-error)" : "var(--mud-palette-warning)";
+        var tooltip = sec > 0
+            ? $"{apt} apt ({sec} security) · {snap} snap pending"
+            : $"{apt} apt · {snap} snap pending";
+        var label = $"↑ {apt + snap}";
+
+        builder.OpenElement(seq++, "span");
+        builder.AddAttribute(seq++, "title", tooltip);
+        builder.AddAttribute(seq++, "class", "aegis-mono");
+        builder.AddAttribute(seq++, "style", $"display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:4px;background:color-mix(in srgb, {color} 18%, transparent);color:{color};font-size:0.7rem;font-weight:500;margin-left:4px;");
+        builder.AddContent(seq++, label);
+        builder.CloseElement();
+    }
+
+    private string FleetSubtitle()
+    {
+        var s = Fleet.Snapshot();
+        var parts = new List<string>();
+        if (s.Running > 0) parts.Add($"{s.Running} running");
+        if (s.Creating > 0) parts.Add($"{s.Creating} booting");
+        if (s.Stopped > 0) parts.Add($"{s.Stopped} stopped");
+        if (s.Failed > 0) parts.Add($"{s.Failed} failed");
+        if (parts.Count == 0) return "nothing live at the moment";
+        return string.Join(" · ", parts) + $" · {s.AgentsLive} agent{(s.AgentsLive == 1 ? "" : "s")} reporting";
+    }
+
+    private static string Age(DateTime created)
+    {
+        var delta = DateTime.UtcNow - created;
+        if (delta.TotalMinutes < 1) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h";
+        return $"{(int)delta.TotalDays}d";
+    }
+
+    private static string TimeLeft(DateTime expires)
+    {
+        var remaining = expires - DateTime.UtcNow;
+        if (remaining.TotalHours < 0) return "expired";
+        if (remaining.TotalHours < 1) return $"{remaining.Minutes}m";
+        if (remaining.TotalHours < 24) return $"{remaining.Hours}h";
+        return $"{remaining.Days}d";
+    }
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "…";
+
+    public void Dispose() => _subscription?.Dispose();
+}

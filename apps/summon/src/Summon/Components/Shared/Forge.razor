@@ -1,0 +1,392 @@
+@namespace Summon.Components.Shared
+@inject Summon.Services.Catalog.SnapStoreClient SnapStore
+@inject Summon.Services.Catalog.AptIndex AptIndex
+@using Summon.Services.Catalog
+
+<MudStack Row AlignItems="AlignItems.End" Justify="Justify.SpaceBetween" Class="mb-3">
+    <MudStack Spacing="0">
+        <MudText Typo="Typo.h6">Forge</MudText>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+            @Subtitle
+        </MudText>
+    </MudStack>
+    <MudTooltip Text="@CatalogStatusTooltip" Placement="Placement.Left">
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                 Icon="@Icons.Material.Outlined.Cloud"
+                 Color="@(AptIndex.Count == 0 ? Color.Default : Color.Success)">
+            @(AptIndex.Count == 0 ? "loading catalog" : $"{AptIndex.Count:N0} + snap")
+        </MudChip>
+    </MudTooltip>
+</MudStack>
+
+<MudAutocomplete T="CatalogSearchResult"
+                 Placeholder="Search apt, Snap Store, curated — try 'docker' or 'rust'"
+                 Variant="Variant.Filled"
+                 SearchFunc="@SearchCatalogs"
+                 ToStringFunc="@(_ => string.Empty)"
+                 DebounceInterval="300"
+                 MinCharacters="2"
+                 ShowProgressIndicator
+                 Clearable
+                 ResetValueOnEmptyText
+                 CoerceText="false"
+                 ValueChanged="OnCatalogPicked"
+                 Adornment="Adornment.Start"
+                 AdornmentIcon="@Icons.Material.Filled.Search"
+                 Margin="Margin.Normal"
+                 Class="mb-4">
+    <ItemTemplate Context="item">
+        <MediaRow Title="@item.DisplayName"
+                  Subtitle="@item.Source"
+                  Caption="@ResultCaption(item)">
+            <Lead>
+                <SourceBadge Source="@item.Source" />
+            </Lead>
+        </MediaRow>
+    </ItemTemplate>
+</MudAutocomplete>
+
+<MudText Typo="Typo.overline" Class="mud-text-secondary mb-2">Recipes</MudText>
+<MudStack Row Wrap="Wrap.Wrap" Spacing="1" Class="mb-4">
+    @foreach (var recipe in AvailableRecipes())
+    {
+        <MudTooltip Text="@RecipeTooltip(recipe)" Placement="Placement.Top">
+            <MudButton Variant="@(IsRecipeActive(recipe) ? Variant.Filled : Variant.Outlined)"
+                       Color="@(IsRecipeActive(recipe) ? Color.Primary : Color.Default)"
+                       Size="Size.Small"
+                       StartIcon="@recipe.Icon"
+                       OnClick="@(() => ApplyRecipe(recipe))">
+                @recipe.Name
+            </MudButton>
+        </MudTooltip>
+    }
+</MudStack>
+
+<MudPaper Elevation="0" Outlined Class="rounded-lg mb-4">
+    <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="pa-3">
+        <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+            <MudText Typo="Typo.subtitle2">Your stack</MudText>
+            @if (SelectedPackages.Count == 0)
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">empty — search or tap a recipe above</MudText>
+            }
+            else
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    @SelectedPackages.Count item@(SelectedPackages.Count == 1 ? "" : "s") · ≈@EstimateMinutes() min
+                </MudText>
+            }
+        </MudStack>
+        @if (SelectedPackages.Count > 0)
+        {
+            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Secondary"
+                       StartIcon="@Icons.Material.Outlined.DeleteSweep"
+                       OnClick="ClearAll">Clear</MudButton>
+        }
+    </MudStack>
+    @if (SelectedPackages.Count > 0)
+    {
+        <MudDivider />
+        @foreach (var pkg in SelectedDetails())
+        {
+            <MediaRow Class="pa-3"
+                      Title="@pkg.DisplayName"
+                      Subtitle="@LinuxSourceLabel(pkg)"
+                      Caption="@SnippetPreview(pkg)">
+                <Lead>
+                    <SourceBadge Source="@LinuxSourceLabel(pkg)" />
+                </Lead>
+                <End>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                                   OnClick="@(() => DeselectPackage(pkg.Name))" />
+                </End>
+            </MediaRow>
+            <MudDivider />
+        }
+    }
+</MudPaper>
+
+<MudExpansionPanels Elevation="0" Class="mb-2" MultiExpansion="false">
+    <MudExpansionPanel>
+        <TitleContent>
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                <MudIcon Icon="@Icons.Material.Outlined.LibraryBooks" Size="Size.Small" />
+                <MudText Typo="Typo.body2">Browse curated catalog</MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@CuratedPackages.Count rows</MudText>
+            </MudStack>
+        </TitleContent>
+        <ChildContent>
+            <MudToggleGroup T="string" @bind-Value="_sourceFilter" Color="Color.Secondary" Size="Size.Small" Class="mb-3">
+                <MudToggleItem Value="@("all")">All</MudToggleItem>
+                <MudToggleItem Value="@(PackageLinuxSource.Apt)">apt</MudToggleItem>
+                <MudToggleItem Value="@(PackageLinuxSource.Snap)">snap</MudToggleItem>
+                <MudToggleItem Value="@(PackageLinuxSource.Script)">script</MudToggleItem>
+            </MudToggleGroup>
+            @foreach (var group in GroupedPackages())
+            {
+                <MudText Typo="Typo.subtitle2" Class="mt-3 mb-1">@group.Key</MudText>
+                <MudSimpleTable Dense Hover Bordered="false" Class="mb-2 rounded mud-elevation-1">
+                    <tbody>
+                    @foreach (var pkg in group.OrderBy(p => p.DisplayName))
+                    {
+                        <tr>
+                            <td style="width: 3rem;">
+                                <MudCheckBox T="bool"
+                                             Value="@SelectedPackages.Contains(pkg.Name)"
+                                             ValueChanged="@(v => SetPackageSelected(pkg.Name, v == true))"
+                                             Dense Color="Color.Primary" />
+                            </td>
+                            <td>
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                    <SourceBadge Source="@LinuxSourceLabel(pkg)" />
+                                    <MudText Typo="Typo.body2">@pkg.DisplayName</MudText>
+                                </MudStack>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">@pkg.Name</MudText>
+                            </td>
+                            <td style="max-width: 22rem;">
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">@SnippetPreview(pkg)</MudText>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </ChildContent>
+    </MudExpansionPanel>
+</MudExpansionPanels>
+
+@code {
+    [Parameter] public string OsFamily { get; set; } = TemplateOsFamilies.Linux;
+    [Parameter, EditorRequired] public IReadOnlyList<SoftwarePackage> CuratedPackages { get; set; } = [];
+    [Parameter, EditorRequired] public HashSet<string> SelectedPackages { get; set; } = [];
+    [Parameter, EditorRequired] public List<SoftwarePackage> DynamicPackages { get; set; } = [];
+    [Parameter] public string Subtitle { get; set; } = "search, recipe, or browse — your stack builds below.";
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private string _sourceFilter = "all";
+
+    private bool IsWindows =>
+        string.Equals(OsFamily, TemplateOsFamilies.Windows, StringComparison.OrdinalIgnoreCase);
+
+    private IEnumerable<SoftwarePackage> AllPackages =>
+        CuratedPackages.Concat(DynamicPackages);
+
+    private IEnumerable<SoftwarePackage> PackagesForTemplate =>
+        CuratedPackages.Where(p => IsWindows
+            ? !string.IsNullOrWhiteSpace(p.WindowsSnippet)
+            : !string.IsNullOrWhiteSpace(p.LinuxSnippet));
+
+    private IEnumerable<SoftwarePackage> PackagesForTemplateFiltered()
+    {
+        if (_sourceFilter == "all") return PackagesForTemplate;
+        return PackagesForTemplate.Where(p =>
+        {
+            var src = string.IsNullOrWhiteSpace(p.LinuxSource) ? PackageLinuxSource.Script : p.LinuxSource;
+            return string.Equals(src, _sourceFilter, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    private static string LinuxSourceLabel(SoftwarePackage p) =>
+        string.IsNullOrWhiteSpace(p.LinuxSource) ? PackageLinuxSource.Script : p.LinuxSource;
+
+    private IEnumerable<IGrouping<string, SoftwarePackage>> GroupedPackages() =>
+        PackagesForTemplateFiltered().GroupBy(p => p.Category).OrderBy(g => g.Key);
+
+    private void SetPackageSelected(string name, bool selected)
+    {
+        if (selected) SelectedPackages.Add(name);
+        else SelectedPackages.Remove(name);
+        Changed();
+    }
+
+    private async void Changed()
+    {
+        if (OnChanged.HasDelegate) await OnChanged.InvokeAsync();
+    }
+
+    private string SnippetPreview(SoftwarePackage p)
+    {
+        var s = SelectedSnippet(p).ReplaceLineEndings(" ").Trim();
+        return s.Length > 120 ? s[..120] + "…" : s;
+    }
+
+    private string SelectedSnippet(SoftwarePackage p) =>
+        IsWindows ? p.WindowsSnippet : p.LinuxSnippet;
+
+    private sealed record Recipe(string Name, string Icon, string[] Keys);
+
+    private static readonly Recipe[] AllRecipes =
+    [
+        new("Dev essentials", Icons.Material.Outlined.Code,
+            ["git", "vim", "tmux", "curl", "htop"]),
+        new("Node web", Icons.Material.Outlined.Language,
+            ["node22", "git", "docker"]),
+        new("Python", Icons.Material.Outlined.Science,
+            ["python3", "build-essential", "libssl-dev", "git"]),
+        new("Rust", Icons.Material.Outlined.Memory,
+            ["rust", "build-essential", "pkg-config", "libssl-dev"]),
+        new("Go", Icons.Material.Outlined.Bolt,
+            ["go", "git", "build-essential"]),
+        new("Kubernetes", Icons.Material.Outlined.Hub,
+            ["kubectl", "jq", "yq-go", "git"]),
+        new("Ops / SRE", Icons.Material.Outlined.Terminal,
+            ["docker", "htop", "btop", "jq", "tmux"]),
+        new("Minimal", Icons.Material.Outlined.HorizontalRule,
+            ["git"]),
+    ];
+
+    private IEnumerable<Recipe> AvailableRecipes()
+    {
+        var have = PackagesForTemplate.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+        return AllRecipes
+            .Select(r => r with { Keys = r.Keys.Where(have.Contains).ToArray() })
+            .Where(r => r.Keys.Length > 0);
+    }
+
+    private bool IsRecipeActive(Recipe r) =>
+        r.Keys.Length > 0 && r.Keys.All(k => SelectedPackages.Contains(k));
+
+    private string RecipeTooltip(Recipe r) =>
+        $"Adds {string.Join(", ", r.Keys)} ({r.Keys.Length} package{(r.Keys.Length == 1 ? "" : "s")})";
+
+    private void ApplyRecipe(Recipe r)
+    {
+        if (IsRecipeActive(r))
+        {
+            foreach (var k in r.Keys) SelectedPackages.Remove(k);
+        }
+        else
+        {
+            foreach (var k in r.Keys) SelectedPackages.Add(k);
+        }
+        Changed();
+    }
+
+    private void ClearAll()
+    {
+        SelectedPackages.Clear();
+        DynamicPackages.Clear();
+        Changed();
+    }
+
+    private IEnumerable<SoftwarePackage> SelectedDetails() =>
+        SelectedPackages
+            .Select(n => AllPackages.FirstOrDefault(p => p.Name == n))
+            .Where(p => p is not null)
+            .Select(p => p!)
+            .OrderBy(p => p.DisplayName);
+
+    private void DeselectPackage(string name)
+    {
+        SelectedPackages.Remove(name);
+        DynamicPackages.RemoveAll(p => p.Name == name);
+        Changed();
+    }
+
+    private int EstimateMinutes()
+    {
+        double minutes = 0.3;
+        foreach (var pkg in SelectedDetails())
+        {
+            minutes += pkg.LinuxSource switch
+            {
+                PackageLinuxSource.Apt => 0.2,
+                PackageLinuxSource.Snap => 0.6,
+                _ => 1.5
+            };
+        }
+        return Math.Max(1, (int)Math.Round(minutes));
+    }
+
+    private async Task<IEnumerable<CatalogSearchResult>> SearchCatalogs(string? term, CancellationToken ct)
+    {
+        term = term?.Trim() ?? string.Empty;
+        if (term.Length < 2) return [];
+
+        var curated = PackagesForTemplate
+            .Where(p =>
+                p.Name.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                p.DisplayName.Contains(term, StringComparison.OrdinalIgnoreCase))
+            .Take(8)
+            .Select(p => new CatalogSearchResult("curated", p.Name, p.DisplayName, null, p.Category))
+            .ToList();
+
+        if (IsWindows)
+            return curated.Where(r => !SelectedPackages.Contains(ResolveKey(r)));
+
+        var snapTask = SnapStore.Search(term, 6, ct);
+        var aptResults = AptIndex.Search(term, 8);
+        var snapResults = await snapTask;
+
+        return curated
+            .Concat(aptResults)
+            .Concat(snapResults)
+            .Where(r => !SelectedPackages.Contains(ResolveKey(r)));
+    }
+
+    private void OnCatalogPicked(CatalogSearchResult? pick)
+    {
+        if (pick is null) return;
+        var key = ResolveKey(pick);
+        if (pick.Source != "curated" && DynamicPackages.All(p => p.Name != key))
+            DynamicPackages.Add(BuildDynamicPackage(pick, key));
+        SelectedPackages.Add(key);
+        Changed();
+    }
+
+    private static string ResolveKey(CatalogSearchResult r) =>
+        r.Source == "curated" ? r.Name : $"{r.Source}:{r.Name}";
+
+    private static SoftwarePackage BuildDynamicPackage(CatalogSearchResult r, string key) => r.Source switch
+    {
+        "apt" => new SoftwarePackage
+        {
+            Name = key,
+            DisplayName = string.IsNullOrWhiteSpace(r.DisplayName) ? r.Name : r.DisplayName,
+            Category = "Search results",
+            LinuxSource = PackageLinuxSource.Apt,
+            AptPackageName = r.Name,
+            LinuxSnippet = $"export DEBIAN_FRONTEND=noninteractive && apt-get install -y {r.Name}"
+        },
+        "snap" => new SoftwarePackage
+        {
+            Name = key,
+            DisplayName = string.IsNullOrWhiteSpace(r.DisplayName) ? r.Name : r.DisplayName,
+            Category = "Search results",
+            LinuxSource = PackageLinuxSource.Snap,
+            SnapName = r.Name,
+            LinuxSnippet = $"snap install {r.Name}"
+        },
+        _ => new SoftwarePackage
+        {
+            Name = key,
+            DisplayName = r.DisplayName,
+            Category = "Search results",
+            LinuxSource = PackageLinuxSource.Script,
+            LinuxSnippet = string.Empty
+        }
+    };
+
+    private static string ResultCaption(CatalogSearchResult r) =>
+        !string.IsNullOrWhiteSpace(r.Description) ? Truncate(r.Description!, 100)
+        : r.Section ?? string.Empty;
+
+    private string CatalogStatusTooltip =>
+        AptIndex.Count == 0
+            ? "Apt index still loading from archive.ubuntu.com"
+            : AptIndex.LastRefreshed is { } t
+                ? $"{AptIndex.Count:N0} apt packages · refreshed {Humanize(t)}"
+                : $"{AptIndex.Count:N0} apt packages";
+
+    private static string Truncate(string s, int max) =>
+        string.IsNullOrEmpty(s) ? s : (s.Length > max ? s[..max] + "…" : s);
+
+    private static string Humanize(DateTime ts)
+    {
+        var delta = DateTime.UtcNow - ts;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
+    }
+}

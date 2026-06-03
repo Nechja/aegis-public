@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <ResourcePreloader />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link href="_content/MudBlazor/MudBlazor.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["Summon.styles.css"]" />
+    <style>
+        :root {
+            --aegis-font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+            --aegis-font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Menlo, monospace;
+            --mud-typography-default-family: var(--aegis-font-sans);
+            --mud-typography-body1-family: var(--aegis-font-sans);
+            --mud-typography-body2-family: var(--aegis-font-sans);
+            --mud-typography-subtitle1-family: var(--aegis-font-sans);
+            --mud-typography-subtitle2-family: var(--aegis-font-sans);
+            --mud-typography-caption-family: var(--aegis-font-sans);
+            --mud-typography-overline-family: var(--aegis-font-sans);
+            --mud-typography-button-family: var(--aegis-font-sans);
+            --mud-typography-h1-family: var(--aegis-font-sans);
+            --mud-typography-h2-family: var(--aegis-font-sans);
+            --mud-typography-h3-family: var(--aegis-font-sans);
+            --mud-typography-h4-family: var(--aegis-font-sans);
+            --mud-typography-h5-family: var(--aegis-font-sans);
+            --mud-typography-h6-family: var(--aegis-font-sans);
+        }
+        html, body { overflow-x: hidden; }
+        .aegis-mono { font-family: var(--aegis-font-mono); letter-spacing: -0.01em; }
+        @@keyframes aegis-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .aegis-row-hover:hover { background: var(--mud-palette-action-default-hover); cursor: pointer; }
+    </style>
+    <ImportMap />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <HeadOutlet />
+</head>
+
+<body>
+    <Routes @rendermode="new InteractiveServerRenderMode(prerender: false)" />
+    <ReconnectModal />
+    <script src="_content/MudBlazor/MudBlazor.min.js"></script>
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+
+</html>

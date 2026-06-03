@@ -1,0 +1,48 @@
+@namespace Summon.Components.Atoms
+
+@switch (Kind)
+{
+    case BadgeKind.Chip:
+        <MudChip T="string" Size="@Size" Variant="@ChipVariant" Color="@ColorFor(Source)" Class="@Class">@Label</MudChip>
+        break;
+    case BadgeKind.IconLabel:
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Class="@Class">
+            <MudIcon Icon="@IconFor(Source)" Size="@Size" Color="@ColorFor(Source)" />
+            <MudText Typo="Typo.caption" Class="mud-text-secondary">@Label</MudText>
+        </MudStack>
+        break;
+    default:
+        <MudIcon Icon="@IconFor(Source)" Size="@Size" Color="@ColorFor(Source)" Class="@Class" />
+        break;
+}
+
+@code {
+    public enum BadgeKind { Icon, Chip, IconLabel }
+
+    [Parameter, EditorRequired] public string Source { get; set; } = "";
+    [Parameter] public BadgeKind Kind { get; set; } = BadgeKind.Icon;
+    [Parameter] public Size Size { get; set; } = Size.Small;
+    [Parameter] public Variant ChipVariant { get; set; } = Variant.Outlined;
+    [Parameter] public string Class { get; set; } = "";
+    [Parameter] public string? LabelOverride { get; set; }
+
+    private string Label => string.IsNullOrWhiteSpace(LabelOverride)
+        ? (string.IsNullOrWhiteSpace(Source) ? PackageLinuxSource.Script : Source)
+        : LabelOverride;
+
+    public static string IconFor(string source) => source switch
+    {
+        PackageLinuxSource.Apt => Icons.Material.Outlined.Inventory2,
+        PackageLinuxSource.Snap => Icons.Material.Outlined.Widgets,
+        "curated" => Icons.Material.Outlined.Star,
+        _ => Icons.Material.Outlined.Terminal
+    };
+
+    public static Color ColorFor(string source) => source switch
+    {
+        PackageLinuxSource.Apt => Color.Success,
+        PackageLinuxSource.Snap => Color.Info,
+        "curated" => Color.Primary,
+        _ => Color.Default
+    };
+}

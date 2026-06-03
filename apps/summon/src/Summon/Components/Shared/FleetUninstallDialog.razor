@@ -1,0 +1,154 @@
+@namespace Summon.Components.Shared
+@inject Summon.Services.FleetOperationService FleetOps
+@inject Summon.Services.Data.SummonDb Db
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Uninstall on @TargetCount VM@(TargetCount == 1 ? "" : "s")</MudText>
+    </TitleContent>
+    <DialogContent>
+        @if (_missingApps.Count > 0)
+        {
+            <MudAlert Severity="Severity.Warning" Dense Class="mb-3" Variant="Variant.Outlined">
+                @_missingApps.Count VM@(_missingApps.Count == 1 ? "" : "s") haven't reported apps yet — click Refresh Apps first so the intersection is accurate.
+            </MudAlert>
+        }
+
+        @if (_candidates.Count == 0)
+        {
+            <MudPaper Elevation="0" Outlined Class="pa-6 rounded-lg" Style="text-align: center;">
+                <MudIcon Icon="@Icons.Material.Outlined.Inventory2" Size="Size.Large" Style="opacity: 0.3;" Class="mb-2" />
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    No shared installed apps across this selection.
+                </MudText>
+            </MudPaper>
+        }
+        else
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary mb-2">
+                Showing @_candidates.Count package@(_candidates.Count == 1 ? "" : "s") installed on every reporting VM.
+            </MudText>
+            <MudTable T="InstalledApp" Items="@_candidates" Dense Hover Bordered="false" Elevation="0"
+                      MultiSelection="true" @bind-SelectedItems="_selected" SelectOnRowClick="true">
+                <HeaderContent>
+                    <MudTh Style="width: 6rem;">Source</MudTh>
+                    <MudTh>Name</MudTh>
+                    <MudTh>Version</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd DataLabel="Source"><SourceBadge Source="@context.Source" Kind="SourceBadge.BadgeKind.IconLabel" /></MudTd>
+                    <MudTd DataLabel="Name"><Mono>@context.Name</Mono></MudTd>
+                    <MudTd DataLabel="Version"><Mono Class="mud-text-secondary">@context.Version</Mono></MudTd>
+                </RowTemplate>
+            </MudTable>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Error"
+                   StartIcon="@Icons.Material.Outlined.DeleteForever"
+                   OnClick="Uninstall" Disabled="@(_submitting || _selected.Count == 0)">
+            @(_submitting ? "Starting…" : "Uninstall")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<Guid> TargetVmIds { get; set; } = [];
+    [Parameter] public int TargetCount { get; set; }
+
+    private List<VmRecord> _targetVms = [];
+    private List<InstalledApp> _candidates = [];
+    private readonly List<Guid> _missingApps = [];
+    private HashSet<InstalledApp> _selected = [];
+    private bool _submitting;
+
+    protected override void OnInitialized()
+    {
+        foreach (var id in TargetVmIds)
+        {
+            var vm = Db.Vms.FindById(id);
+            if (vm is null) continue;
+            _targetVms.Add(vm);
+            if (vm.InstalledApps is null) _missingApps.Add(vm.Id);
+        }
+
+        var reporting = _targetVms.Where(v => v.InstalledApps is { Count: >= 0 }).ToList();
+        if (reporting.Count == 0)
+        {
+            _candidates = [];
+            return;
+        }
+
+        // Start from the first reporting VM's list, intersect by (Source, Name) with every other reporting VM.
+        var seed = reporting[0].InstalledApps!;
+        var candidates = seed.ToList();
+        for (var i = 1; i < reporting.Count; i++)
+        {
+            var others = reporting[i].InstalledApps!;
+            var keys = others
+                .Select(a => (a.Source, a.Name))
+                .ToHashSet();
+            candidates = candidates
+                .Where(c => keys.Contains((c.Source, c.Name)))
+                .ToList();
+        }
+
+        // Dedupe the seed by (Source, Name) in case a VM has duplicate rows.
+        _candidates = candidates
+            .GroupBy(a => (a.Source, a.Name))
+            .Select(g => g.First())
+            .OrderBy(a => a.Source)
+            .ThenBy(a => a.Name)
+            .ToList();
+    }
+
+    private async Task Uninstall()
+    {
+        if (_selected.Count == 0) return;
+        _submitting = true;
+        try
+        {
+            var dict = new Dictionary<Guid, IReadOnlyList<InstallCommandItem>>();
+            foreach (var vm in _targetVms)
+            {
+                if (vm.InstalledApps is not { Count: > 0 } apps) continue;
+                var items = new List<InstallCommandItem>();
+                foreach (var pick in _selected)
+                {
+                    var row = apps.FirstOrDefault(a =>
+                        string.Equals(a.Source, pick.Source, StringComparison.Ordinal) &&
+                        string.Equals(a.Name, pick.Name, StringComparison.Ordinal));
+                    if (row is null) continue;
+                    var script = row.Source switch
+                    {
+                        PackageLinuxSource.Snap => $"snap remove {row.Name}",
+                        _ => $"export DEBIAN_FRONTEND=noninteractive && apt-get remove -y {row.Name}"
+                    };
+                    items.Add(new InstallCommandItem($"{row.Source}:{row.Name}", row.Name, script));
+                }
+                if (items.Count > 0) dict[vm.Id] = items;
+            }
+
+            if (dict.Count == 0)
+            {
+                Snackbar.Add("No matching installed apps on target VMs.", Severity.Warning);
+                _submitting = false;
+                return;
+            }
+
+            await FleetOps.StartUninstall(TargetVmIds, dict);
+            Snackbar.Add($"Uninstall started on {dict.Count} VM{(dict.Count == 1 ? "" : "s")}", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Uninstall failed to start: {ex.Message}", Severity.Error);
+            _submitting = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

@@ -1,0 +1,180 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject Summon.Services.FleetSnapshot Fleet
+@inject Summon.Services.VmStateNotifier Notifier
+@inject NavigationManager Nav
+
+<MudThemeProvider Theme="@Summon.AegisTheme.Dark" IsDarkMode="true" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="0" Dense Style="border-bottom: 1px solid var(--mud-palette-divider);">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="3" Style="min-width: 0;">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1" Style="flex-shrink: 0;">
+                <MudIcon Icon="@Icons.Material.Filled.Hexagon" Color="Color.Primary" Size="Size.Small" />
+                <MudText Class="aegis-mono" Style="font-size: 0.85rem; font-weight: 500; letter-spacing: 0.02em;">aegis</MudText>
+            </MudStack>
+            <span class="aegis-mono" style="color: var(--mud-palette-text-disabled); font-size: 0.85rem;">›</span>
+            <MudText Class="aegis-mono" Style="font-size: 0.85rem; color: var(--mud-palette-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                @_breadcrumb
+            </MudText>
+        </MudStack>
+
+        <MudSpacer />
+
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+            <OperationsIndicator />
+            <MudTooltip Text="@AgentTooltip" Placement="Placement.Bottom">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="2"
+                      Style="padding: 4px 10px; border: 1px solid var(--mud-palette-divider); border-radius: 999px;">
+                <span style="@ConnectionDotStyle"></span>
+                <MudText Class="aegis-mono" Style="font-size: 0.75rem; color: var(--mud-palette-text-secondary);">
+                    @_stats.AgentsLive/@_stats.TotalVms
+                </MudText>
+            </MudStack>
+        </MudTooltip>
+        </MudStack>
+    </MudAppBar>
+
+    <MudDrawer Open="true" Variant="DrawerVariant.Mini" OpenMiniOnHover="false"
+               Elevation="0" ClipMode="DrawerClipMode.Always"
+               Style="border-right: 1px solid var(--mud-palette-divider);">
+        <MudNavMenu Class="pa-2">
+            <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Outlined.Hub">Fleet</MudNavLink>
+            <MudNavLink Href="/summon" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Outlined.AutoAwesome">Summon</MudNavLink>
+            <MudNavLink Href="#" Match="NavLinkMatch.All" Icon="@Icons.Material.Outlined.Inventory2" Disabled="true">Catalog</MudNavLink>
+            <MudNavLink Href="#" Match="NavLinkMatch.All" Icon="@Icons.Material.Outlined.History" Disabled="true">Activity</MudNavLink>
+            <MudNavLink Href="#" Match="NavLinkMatch.All" Icon="@Icons.Material.Outlined.Settings" Disabled="true">Settings</MudNavLink>
+        </MudNavMenu>
+    </MudDrawer>
+
+    <MudMainContent Style="overflow-x: hidden;">
+        <div class="aegis-content" style="max-width: 1440px; margin: 0 auto; padding: 16px 32px 56px 32px; box-sizing: border-box;">
+            @Body
+        </div>
+    </MudMainContent>
+
+    <MudAppBar Bottom Dense Elevation="0"
+               Style="height: 32px; min-height: 32px; border-top: 1px solid var(--mud-palette-divider); background: var(--mud-palette-background); font-size: 0.75rem;">
+        <MudStack Row AlignItems="AlignItems.Center" Spacing="4" Class="aegis-mono" Style="font-size: 0.72rem; color: var(--mud-palette-text-secondary);">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Outlined.Dns" Size="Size.Small" Style="font-size: 0.9rem;" />
+                <span>@_stats.TotalVms vm@(_stats.TotalVms == 1 ? "" : "s")</span>
+            </MudStack>
+            @if (_stats.Running > 0)
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                    <span style="color: var(--mud-palette-success);">●</span>
+                    <span>@_stats.Running running</span>
+                </MudStack>
+            }
+            @if (_stats.Creating > 0)
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                    <span style="color: var(--mud-palette-warning);">◐</span>
+                    <span>@_stats.Creating booting</span>
+                </MudStack>
+            }
+            @if (_stats.Failed > 0)
+            {
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                    <span style="color: var(--mud-palette-error);">✕</span>
+                    <span>@_stats.Failed failed</span>
+                </MudStack>
+            }
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Outlined.Sensors" Size="Size.Small" Style="font-size: 0.9rem;" />
+                <span>@_stats.AgentsLive agent@(_stats.AgentsLive == 1 ? "" : "s") live</span>
+            </MudStack>
+        </MudStack>
+        <MudSpacer />
+        <MudText Class="aegis-mono" Style="font-size: 0.72rem; color: var(--mud-palette-text-secondary);">
+            @LastEventLabel
+        </MudText>
+    </MudAppBar>
+</MudLayout>
+
+@code {
+    private FleetStats _stats = new(0, 0, 0, 0, 0, 0, null);
+    private string _breadcrumb = string.Empty;
+    private IDisposable? _subscription;
+    private System.Threading.Timer? _tick;
+
+    protected override void OnInitialized()
+    {
+        _stats = Fleet.Snapshot();
+        _breadcrumb = DeriveBreadcrumb(Nav.Uri);
+        Nav.LocationChanged += OnLocationChanged;
+
+        _subscription = Notifier.Subscribe(_ =>
+        {
+            _stats = Fleet.Snapshot();
+            return InvokeAsync(StateHasChanged);
+        });
+
+        _tick = new System.Threading.Timer(_ =>
+        {
+            _stats = Fleet.Snapshot();
+            InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+    }
+
+    private void OnLocationChanged(object? _, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs args)
+    {
+        _breadcrumb = DeriveBreadcrumb(args.Location);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private static string DeriveBreadcrumb(string uri)
+    {
+        var path = new Uri(uri).AbsolutePath.Trim('/');
+        if (string.IsNullOrEmpty(path)) return "fleet";
+        if (path == "summon") return "summon";
+        if (path.StartsWith("vm/", StringComparison.OrdinalIgnoreCase))
+        {
+            var id = path[3..];
+            return id.Length > 8 ? $"vm/{id[..8]}" : $"vm/{id}";
+        }
+        return path;
+    }
+
+    private string ConnectionDotStyle
+    {
+        get
+        {
+            var color = _stats.AgentsLive > 0 ? "var(--mud-palette-success)" : "var(--mud-palette-text-disabled)";
+            var shadow = _stats.AgentsLive > 0 ? "0 0 6px var(--mud-palette-success)" : "none";
+            return $"display:inline-block;width:8px;height:8px;border-radius:50%;background:{color};box-shadow:{shadow};";
+        }
+    }
+
+    private string AgentTooltip => _stats switch
+    {
+        { TotalVms: 0 } => "No VMs summoned",
+        { AgentsLive: 0 } => $"0 of {_stats.TotalVms} agents reporting",
+        _ => $"{_stats.AgentsLive} of {_stats.TotalVms} agents reporting"
+    };
+
+    private string LastEventLabel => _stats.LastAgentEvent is { } t
+        ? $"last event {Humanize(t)}"
+        : "no agent traffic yet";
+
+    private static string Humanize(DateTime ts)
+    {
+        var delta = DateTime.UtcNow - ts;
+        if (delta.TotalSeconds < 5) return "just now";
+        if (delta.TotalSeconds < 60) return $"{(int)delta.TotalSeconds}s ago";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        _subscription?.Dispose();
+        _tick?.Dispose();
+    }
+}

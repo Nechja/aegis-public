@@ -1,0 +1,329 @@
+@page "/summon"
+@inject Summon.Services.Data.SummonDb Db
+@inject Summon.Services.KubeVirtService KubeVirt
+@inject Summon.Services.CloudInitRenderer CloudInit
+@inject Summon.Services.AgentMessaging Agent
+@inject Summon.Services.VmStateNotifier Notifier
+@inject Summon.Services.Catalog.SnapStoreClient SnapStore
+@inject Summon.Services.Catalog.AptIndex AptIndex
+@inject IConfiguration Config
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@using Summon.Services
+@using Summon.Services.Catalog
+
+<PageTitle>Summon — Create VM</PageTitle>
+
+<MudStack Spacing="0" Class="mb-5">
+    <MudText Typo="Typo.overline" Class="mud-text-secondary">SUMMON</MudText>
+    <MudText Typo="Typo.h5" Style="font-weight: 600; letter-spacing: -0.02em;">Create a VM</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        Name it, pick a template, forge a software stack, summon.
+    </MudText>
+</MudStack>
+
+<MudGrid>
+    <MudItem xs="12" md="8">
+        <MudCard>
+            <MudCardContent>
+                <MudTextField @bind-Value="_name" Label="Name" Required
+                              Placeholder="my-dev-box" Variant="Variant.Outlined" Class="mb-4" />
+
+                <MudSelect T="string" Value="@_templateName" ValueChanged="OnTemplateChanged"
+                           Label="Template" Variant="Variant.Outlined" Class="mb-4" Dense="false">
+                    @foreach (var t in _templates)
+                    {
+                        <MudSelectItem Value="@t.Name">
+                            <MudStack Spacing="0">
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudText Typo="Typo.body1">@t.Name</MudText>
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text"
+                                             Color="@(t.OsFamily == TemplateOsFamilies.Windows ? Color.Info : Color.Success)">
+                                        @(t.OsFamily == TemplateOsFamilies.Windows ? "Windows" : "Linux")
+                                    </MudChip>
+                                    @if (!t.ProvisioningEnabled)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">Soon</MudChip>
+                                    }
+                                </MudStack>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">@TemplateSubtitle(t)</MudText>
+                            </MudStack>
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+
+                @if (SelectedTemplate is { ProvisioningEnabled: false })
+                {
+                    <MudAlert Severity="Severity.Info" Dense Class="mb-4" Variant="Variant.Outlined">
+                        This template is listed so you can wire the image and userdata (sysprep / cloudbase-init) in KubeVirt;
+                        Summon will not create a VM until <strong>ProvisioningEnabled</strong> is turned on for it.
+                    </MudAlert>
+                }
+
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Compute</MudText>
+                <MudToggleGroup T="string" Value="@_instanceType" ValueChanged="OnInstanceTypeChanged"
+                                Color="Color.Primary" Class="mb-4">
+                    <MudToggleItem Value="@("small")">Small (1c · 1G)</MudToggleItem>
+                    <MudToggleItem Value="@("medium")">Medium (2c · 4G)</MudToggleItem>
+                    <MudToggleItem Value="@("large")">Large (4c · 8G)</MudToggleItem>
+                </MudToggleGroup>
+
+                <MudText Typo="Typo.subtitle1" Class="mb-2">Disk</MudText>
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="mb-1">
+                    <MudToggleGroup T="int" Value="@DiskPresetOrCustom" ValueChanged="OnDiskPresetChanged"
+                                    Color="Color.Primary">
+                        <MudToggleItem Value="10">10 G</MudToggleItem>
+                        <MudToggleItem Value="30">30 G</MudToggleItem>
+                        <MudToggleItem Value="80">80 G</MudToggleItem>
+                        <MudToggleItem Value="0">Custom</MudToggleItem>
+                    </MudToggleGroup>
+                    <MudNumericField T="int" Value="_diskGb" ValueChanged="OnDiskValueChanged"
+                                     Min="@DiskFloor" Max="1000" Step="10"
+                                     Variant="Variant.Outlined" Style="max-width: 120px;"
+                                     Adornment="Adornment.End" AdornmentText="GiB" />
+                </MudStack>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary mb-4" Style="display:block;">
+                    @DiskHelperText
+                </MudText>
+
+                <Forge OsFamily="@(SelectedTemplate?.OsFamily ?? TemplateOsFamilies.Linux)"
+                       CuratedPackages="@_packages"
+                       SelectedPackages="@_selectedPackages"
+                       DynamicPackages="@_dynamicPackages"
+                       OnChanged="StateHasChanged" />
+
+                <MudSelect @bind-Value="_expiry" Label="Expires" Variant="Variant.Outlined">
+                    <MudSelectItem Value="@("4h")">4 hours</MudSelectItem>
+                    <MudSelectItem Value="@("24h")">24 hours</MudSelectItem>
+                    <MudSelectItem Value="@("7d")">7 days</MudSelectItem>
+                    <MudSelectItem Value="@("30d")">30 days</MudSelectItem>
+                </MudSelect>
+            </MudCardContent>
+            <MudCardActions>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                           OnClick="Create" Disabled="_submitting || SelectedTemplateSummoningBlocked"
+                           StartIcon="@Icons.Material.Filled.FlashOn">
+                    @(_submitting ? "Summoning..." : "Summon")
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private string _name = string.Empty;
+    private string _templateName = "Ubuntu 24.04";
+    private string _instanceType = "medium";
+    private int _diskGb = 30;
+    private string _expiry = "7d";
+    private bool _submitting;
+    private readonly HashSet<string> _selectedPackages = ["git"];
+
+    private List<VmTemplate> _templates = [];
+    private List<SoftwarePackage> _packages = [];
+    private readonly List<SoftwarePackage> _dynamicPackages = [];
+
+    private VmTemplate? SelectedTemplate =>
+        _templates.FirstOrDefault(t => t.Name == _templateName);
+
+    private bool SelectedTemplateSummoningBlocked =>
+        SelectedTemplate is null or { ProvisioningEnabled: false };
+
+    private int DiskFloor => SelectedTemplate?.MinDiskGb ?? 10;
+
+    private int DiskPresetOrCustom => _diskGb is 10 or 30 or 80 ? _diskGb : 0;
+
+    private string DiskHelperText
+    {
+        get
+        {
+            var floor = DiskFloor;
+            return _diskGb < floor
+                ? $"{_templateName} requires at least {floor} GiB — raising."
+                : $"Root volume size. {_templateName} floor: {floor} GiB.";
+        }
+    }
+
+    private Task OnInstanceTypeChanged(string value)
+    {
+        _instanceType = value;
+        return Task.CompletedTask;
+    }
+
+    private void OnDiskPresetChanged(int preset)
+    {
+        if (preset == 0) return; // "Custom" — keep current value, user edits the numeric field
+        _diskGb = Math.Max(preset, DiskFloor);
+    }
+
+    private void OnDiskValueChanged(int value)
+    {
+        _diskGb = Math.Max(value, DiskFloor);
+    }
+
+    private IEnumerable<SoftwarePackage> AllPackages => _packages.Concat(_dynamicPackages);
+
+    protected override void OnInitialized()
+    {
+        _templates = Db.Templates.FindAll().OrderBy(t => t.Name).ToList();
+        _packages = Db.Packages.FindAll().ToList();
+
+        if (_templates.All(t => t.Name != _templateName))
+        {
+            _templateName = _templates.FirstOrDefault(t => t.ProvisioningEnabled)?.Name
+                            ?? _templates.FirstOrDefault()?.Name
+                            ?? _templateName;
+        }
+
+        PruneSelectedPackages();
+    }
+
+    private Task OnTemplateChanged(string name)
+    {
+        _templateName = name;
+        PruneSelectedPackages();
+        if (_diskGb < DiskFloor) _diskGb = DiskFloor;
+        return Task.CompletedTask;
+    }
+
+    private void PruneSelectedPackages()
+    {
+        // Allow curated picks valid for the template + any dynamic picks (keyed "apt:..." / "snap:...").
+        var allowed = AllPackages.Where(p =>
+        {
+            if (SelectedTemplate is null) return true;
+            var isWindows = string.Equals(SelectedTemplate.OsFamily, TemplateOsFamilies.Windows, StringComparison.OrdinalIgnoreCase);
+            return isWindows
+                ? !string.IsNullOrWhiteSpace(p.WindowsSnippet)
+                : !string.IsNullOrWhiteSpace(p.LinuxSnippet);
+        }).Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+        _selectedPackages.RemoveWhere(n => !allowed.Contains(n));
+    }
+
+    private static string TemplateSubtitle(VmTemplate t)
+    {
+        if (!t.ProvisioningEnabled)
+            return $"Image: {t.BaseImage} · provisioning disabled in catalog";
+        return $"Image: {t.BaseImage} · {t.MinCpu}c / {t.MinMemoryGb} GiB minimum";
+    }
+
+    private async Task Create()
+    {
+        if (string.IsNullOrWhiteSpace(_name))
+        {
+            Snackbar.Add("Name is required", Severity.Warning);
+            return;
+        }
+
+        _submitting = true;
+        StateHasChanged();
+
+        var kubeVmName = _name.ToLowerInvariant().Replace(' ', '-');
+
+        var expiresAt = _expiry switch
+        {
+            "4h" => DateTime.UtcNow.AddHours(4),
+            "24h" => DateTime.UtcNow.AddHours(24),
+            "7d" => DateTime.UtcNow.AddDays(7),
+            "30d" => DateTime.UtcNow.AddDays(30),
+            _ => DateTime.UtcNow.AddDays(7)
+        };
+
+        var template = Db.Templates.FindOne(t => t.Name == _templateName);
+        if (template is null)
+        {
+            Snackbar.Add("Template not found", Severity.Error);
+            _submitting = false;
+            return;
+        }
+
+        if (!template.ProvisioningEnabled)
+        {
+            Snackbar.Add("This template cannot be summoned until provisioning is enabled.", Severity.Warning);
+            _submitting = false;
+            return;
+        }
+
+        var rabbitHost = Config["RABBITMQ_HOST"] ?? "rabbitmq.rabbitmq.svc.cluster.local";
+        var rabbitUser = Config["RABBITMQ_USER"] ?? "aegis";
+        var rabbitPass = Config["RABBITMQ_PASS"] ?? "guest";
+        var cloudInit = CloudInit.Render(kubeVmName, "aegis", "summon", rabbitHost, rabbitUser, rabbitPass);
+
+        var windows = string.Equals(template.OsFamily, TemplateOsFamilies.Windows, StringComparison.OrdinalIgnoreCase);
+        var selectedPkgRows = AllPackages
+            .Where(p => _selectedPackages.Contains(p.Name))
+            .Select(p => (Pkg: p, Snippet: (windows ? p.WindowsSnippet : p.LinuxSnippet).Trim()))
+            .Where(x => !string.IsNullOrWhiteSpace(x.Snippet))
+            .ToList();
+
+        var softwareInstalls = selectedPkgRows
+            .Select(x => new PackageInstallEntry
+            {
+                PackageKey = x.Pkg.Name,
+                DisplayName = x.Pkg.DisplayName,
+                ScriptSnippet = x.Snippet,
+                Phase = PackageInstallPhase.Pending,
+                UpdatedAt = DateTime.UtcNow
+            })
+            .ToList();
+
+        var installItems = selectedPkgRows
+            .Select(x => new InstallCommandItem(x.Pkg.Name, x.Pkg.DisplayName, x.Snippet))
+            .ToList();
+
+        var vm = new VmRecord
+        {
+            Name = _name,
+            TemplateName = _templateName,
+            OsFamily = template.OsFamily,
+            InstanceType = _instanceType,
+            DiskGb = Math.Max(_diskGb, template.MinDiskGb),
+            KubeVmName = kubeVmName,
+            TailscaleHostname = kubeVmName,
+            Packages = [.. _selectedPackages],
+            SoftwareInstalls = softwareInstalls.Count > 0 ? softwareInstalls : null,
+            CloudInit = cloudInit,
+            ExpiresAt = expiresAt
+        };
+
+        // Insert-first so the FleetReconciler can never observe cluster-has/db-doesn't during the
+        // window between cluster create and db write. `CreatedAt` is inside the grace period so the
+        // reverse-prune won't touch it while KubeVirt.Create is in flight.
+        Db.Vms.Insert(vm);
+        await Notifier.Publish(new VmStateEvent(vm.Id, vm.State));
+
+        bool created;
+        try
+        {
+            created = await KubeVirt.Create(vm, template, cloudInit);
+        }
+        catch (Exception ex)
+        {
+            Db.Vms.Delete(vm.Id);
+            Snackbar.Add($"Failed to create VM: {ex.Message}", Severity.Error);
+            _submitting = false;
+            return;
+        }
+
+        if (!created)
+        {
+            Db.Vms.Delete(vm.Id);
+            Snackbar.Add("Failed to create VM resources", Severity.Error);
+            _submitting = false;
+            return;
+        }
+
+        Db.Audit.Insert(new AuditEntry
+        {
+            Action = "vm.summon",
+            ResourceId = vm.Id.ToString(),
+            Detail = $"Summoned {vm.Name} ({vm.InstanceType}, {vm.TemplateName})"
+        });
+
+        if (installItems.Count > 0)
+            await Agent.SendInstallItems(kubeVmName, installItems);
+
+        Snackbar.Add($"Summoning {vm.Name}...", Severity.Success);
+        Nav.NavigateTo($"/vm/{vm.Id}");
+    }
+}

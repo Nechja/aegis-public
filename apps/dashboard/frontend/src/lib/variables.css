@@ -1,0 +1,58 @@
+:root {
+	/* Canvas — deep dark terminal */
+	--bg-canvas: #0a0a0f;
+	--bg-card: #12121a;
+	--bg-card-hover: #1a1a25;
+	--bg-inset: #06060a;
+
+	/* Borders — subtle neon edge */
+	--border-default: #2a2a3a;
+	--border-hover: #4a4a5a;
+
+	/* Text */
+	--text-primary: #e6edf3;
+	--text-secondary: #8b949e;
+	--text-muted: #6c6c6c;
+
+	/* Pride neon palette */
+	--neon-pink: #D787D7;
+	--neon-rose: #AF005F;
+	--neon-orange: #FF8700;
+	--neon-peach: #FFAF5F;
+	--neon-dusty: #AF5F87;
+	--neon-cyan: #00AFAF;
+	--neon-green: #5FAF00;
+
+	/* Semantic mappings */
+	--accent-primary: var(--neon-pink);
+	--accent-secondary: var(--neon-orange);
+	--accent-success: var(--neon-green);
+	--accent-warn: var(--neon-peach);
+	--accent-danger: var(--neon-rose);
+	--accent-info: var(--neon-cyan);
+	--accent-muted: var(--neon-dusty);
+
+	/* Glow effects */
+	--glow-pink: 0 0 8px rgba(215, 135, 215, 0.3), 0 0 20px rgba(215, 135, 215, 0.1);
+	--glow-orange: 0 0 8px rgba(255, 135, 0, 0.3), 0 0 20px rgba(255, 135, 0, 0.1);
+	--glow-cyan: 0 0 8px rgba(0, 175, 175, 0.3), 0 0 20px rgba(0, 175, 175, 0.1);
+	--glow-green: 0 0 8px rgba(95, 175, 0, 0.3), 0 0 20px rgba(95, 175, 0, 0.1);
+	--glow-rose: 0 0 8px rgba(175, 0, 95, 0.3), 0 0 20px rgba(175, 0, 95, 0.1);
+
+	/* Shadows */
+	--shadow-card: 0 1px 3px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(215, 135, 215, 0.03);
+	--shadow-card-hover: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(215, 135, 215, 0.08);
+
+	/* Radii */
+	--radius: 4px;
+	--radius-lg: 8px;
+
+	/* Typography — all mono, all the time */
+	--font: 'MonaspiceAr NF', 'Monaspace Argon', Consolas, monospace;
+	--font-mono: 'MonaspiceAr NF', 'Monaspace Argon', Consolas, monospace;
+
+	/* Sizing */
+	--icon-sm: 16px;
+	--icon-md: 20px;
+	--icon-lg: 24px;
+}

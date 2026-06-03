@@ -1,0 +1,42 @@
+@namespace Summon.Components.Atoms
+@inject IJSRuntime JS
+@inject ISnackbar Snackbar
+
+<MudStack Row AlignItems="AlignItems.Center" Spacing="2" Class="@Class">
+    @if (!string.IsNullOrWhiteSpace(Icon))
+    {
+        <MudIcon Icon="@Icon" Size="Size.Small" Color="@IconColor" />
+    }
+    <MudStack Spacing="0" Class="flex-grow-1" Style="min-width: 0;">
+        @if (!string.IsNullOrWhiteSpace(Label))
+        {
+            <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.06em; text-transform: uppercase;">
+                @Label
+            </MudText>
+        }
+        <span class="aegis-mono" style="font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">@Value</span>
+    </MudStack>
+    <MudIconButton Icon="@Icons.Material.Outlined.ContentCopy" Size="Size.Small" OnClick="Copy" />
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public Color IconColor { get; set; } = Color.Default;
+    [Parameter] public string Class { get; set; } = "";
+
+    private async Task Copy()
+    {
+        if (string.IsNullOrWhiteSpace(Value)) return;
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", Value);
+            Snackbar.Add($"Copied {(Label ?? "value").ToLowerInvariant()}", Severity.Success);
+        }
+        catch
+        {
+            Snackbar.Add("Copy failed — select manually", Severity.Warning);
+        }
+    }
+}

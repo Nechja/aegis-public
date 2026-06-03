@@ -1,0 +1,35 @@
+@namespace Summon.Components.Atoms
+
+<MudTooltip Text="@(Label ?? State)" Placement="Placement.Top">
+    <span style="@Style"></span>
+</MudTooltip>
+
+@code {
+    [Parameter, EditorRequired] public string State { get; set; } = "";
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public int Size { get; set; } = 8;
+
+    private string Style =>
+        $"display:inline-block;width:{Size}px;height:{Size}px;border-radius:50%;" +
+        $"background:{Fill};box-shadow:0 0 0 2px {Ring};" +
+        (IsPulse ? "animation: aegis-pulse 1.4s ease-in-out infinite;" : "");
+
+    private string Fill => State switch
+    {
+        VmState.Running  => "var(--mud-palette-success)",
+        VmState.Creating or VmState.Importing or VmState.Starting => "var(--mud-palette-warning)",
+        VmState.Stopped  => "var(--mud-palette-text-disabled)",
+        VmState.Failed or VmState.Deleting => "var(--mud-palette-error)",
+        _ => "var(--mud-palette-text-disabled)"
+    };
+
+    private string Ring => State switch
+    {
+        VmState.Running  => "rgba(0,200,83,0.18)",
+        VmState.Creating or VmState.Importing or VmState.Starting => "rgba(255,152,0,0.18)",
+        VmState.Failed or VmState.Deleting => "rgba(244,67,54,0.18)",
+        _ => "rgba(255,255,255,0.08)"
+    };
+
+    private bool IsPulse => State is VmState.Creating or VmState.Importing or VmState.Starting or VmState.Deleting;
+}

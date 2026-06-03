@@ -1,0 +1,62 @@
+@namespace Summon.Components.Shared
+@inject Summon.Services.FleetOperationService FleetOps
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Run command on @TargetCount VM@(TargetCount == 1 ? "" : "s")</MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Runs as a single bash invocation on each VM. Output is captured and reported back per target — keep it idempotent and bounded.
+        </MudText>
+        <MudTextField @bind-Value="_label"
+                      Label="Label (optional)"
+                      Placeholder="e.g. rotate-tailscale-cert"
+                      Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-3" />
+        <MudTextField @bind-Value="_script"
+                      Label="Script"
+                      Placeholder="set -e&#10;uname -a"
+                      Lines="10"
+                      Variant="Variant.Outlined"
+                      Class="aegis-mono"
+                      Style="font-family: var(--mud-typography-default-family);" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Outlined.Terminal"
+                   OnClick="Run" Disabled="@(_submitting || string.IsNullOrWhiteSpace(_script))">
+            @(_submitting ? "Starting…" : "Run")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<Guid> TargetVmIds { get; set; } = [];
+    [Parameter] public int TargetCount { get; set; }
+
+    private string _script = "";
+    private string _label = "";
+    private bool _submitting;
+
+    private async Task Run()
+    {
+        if (string.IsNullOrWhiteSpace(_script)) return;
+        _submitting = true;
+        try
+        {
+            await FleetOps.StartExec(TargetVmIds, _script, string.IsNullOrWhiteSpace(_label) ? null : _label);
+            Snackbar.Add($"Exec queued on {TargetVmIds.Count} VM{(TargetVmIds.Count == 1 ? "" : "s")}", Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Exec failed to start: {ex.Message}", Severity.Error);
+            _submitting = false;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}

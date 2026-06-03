@@ -1,0 +1,177 @@
+@page "/operations"
+@implements IDisposable
+@inject Summon.Services.FleetOperationService FleetOps
+@inject Summon.Services.Data.SummonDb Db
+@inject Summon.Services.VmStateNotifier Notifier
+
+<PageTitle>Summon — Operations</PageTitle>
+
+<MudStack Spacing="0" Class="mb-4">
+    <MudText Typo="Typo.overline" Class="mud-text-secondary">OPERATIONS</MudText>
+    <MudText Typo="Typo.h5" Style="font-weight: 600; letter-spacing: -0.02em;">
+        @(_ops.Count == 0 ? "No operations yet" : $"{_ops.Count} recent")
+    </MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        Fleet-wide upgrade / install / uninstall / refresh runs. Expand a row to see agent output.
+    </MudText>
+</MudStack>
+
+@if (_ops.Count == 0)
+{
+    <MudPaper Elevation="0" Outlined Class="pa-8 rounded-lg" Style="text-align: center;">
+        <MudIcon Icon="@Icons.Material.Outlined.Bolt" Size="Size.Large" Class="mb-3" Style="opacity: 0.3;" />
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Run an operation from the fleet view to see it here.
+        </MudText>
+    </MudPaper>
+}
+else
+{
+    <MudStack Spacing="2">
+        @foreach (var op in _ops)
+        {
+            var total = op.Targets.Count;
+            var done = op.Targets.Count(t => IsTerminal(t.Phase));
+            var failed = op.Targets.Count(t => t.Phase == FleetOperationTargetPhase.Failed);
+            var inFlight = op.CompletedAt is null;
+            var expanded = _expanded.Contains(op.Id);
+
+            <MudPaper Elevation="0" Outlined Class="rounded-lg" Style="overflow: hidden;">
+                <div class="aegis-row-hover" style="cursor: pointer;" @onclick="@(() => Toggle(op.Id))">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="3" Class="px-4 py-3">
+                        <MudIcon Icon="@(inFlight ? Icons.Material.Outlined.Sync : (failed > 0 ? Icons.Material.Outlined.Error : Icons.Material.Outlined.CheckCircle))"
+                                 Color="@(inFlight ? Color.Info : (failed > 0 ? Color.Error : Color.Success))"
+                                 Class="@(inFlight ? "mud-icon-rotate" : "")" />
+                        <MudStack Spacing="0" Style="flex: 1 1 auto; min-width: 0;">
+                            <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+                                <MudText Style="font-weight: 500;">@op.Kind</MudText>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    @op.Summary
+                                </MudText>
+                            </MudStack>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @done/@total done@(failed > 0 ? $" · {failed} failed" : "") · started @Humanize(op.StartedAt)
+                                @(op.CompletedAt is { } c ? $" · finished {Humanize(c)}" : "")
+                            </MudText>
+                        </MudStack>
+                        <Mono Class="mud-text-secondary" Style="font-size: 0.7rem;">@op.Id.ToString()[..8]</Mono>
+                        <MudIcon Icon="@(expanded ? Icons.Material.Outlined.ExpandLess : Icons.Material.Outlined.ExpandMore)"
+                                 Size="Size.Small" />
+                    </MudStack>
+                </div>
+                @if (expanded)
+                {
+                    <MudDivider />
+                    <MudStack Spacing="0">
+                        @foreach (var t in op.Targets)
+                        {
+                            <div class="px-4 py-2" style="border-bottom: 1px solid var(--mud-palette-divider);">
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                                    <StateDot State="@MapPhaseToState(t.Phase)" Size="8" />
+                                    <Mono>@VmNameFor(t)</Mono>
+                                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@PhaseColor(t.Phase)">
+                                        @t.Phase
+                                    </MudChip>
+                                    @if (t.ExitCode is { } exit)
+                                    {
+                                        <Mono Class="mud-text-secondary" Style="font-size: 0.75rem;">exit @exit</Mono>
+                                    }
+                                    <MudSpacer />
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@Humanize(t.UpdatedAt)</MudText>
+                                </MudStack>
+                                @if (!string.IsNullOrWhiteSpace(t.Message))
+                                {
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="margin-left: 16px;">
+                                        @t.Message
+                                    </MudText>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(t.Output))
+                                {
+                                    <pre class="aegis-mono" style="margin: 8px 0 0 16px; padding: 10px 12px; background: var(--mud-palette-background-grey); border-radius: 6px; font-size: 0.75rem; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto;">@t.Output</pre>
+                                }
+                            </div>
+                        }
+                    </MudStack>
+                }
+            </MudPaper>
+        }
+    </MudStack>
+}
+
+@code {
+    private IReadOnlyList<FleetOperation> _ops = [];
+    private readonly HashSet<Guid> _expanded = [];
+    private Dictionary<string, string> _vmNameByKube = new();
+    private IDisposable? _subscription;
+    private System.Threading.Timer? _tick;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _subscription = Notifier.Subscribe(_ =>
+        {
+            Refresh();
+            return InvokeAsync(StateHasChanged);
+        });
+        _tick = new System.Threading.Timer(_ =>
+        {
+            Refresh();
+            InvokeAsync(StateHasChanged);
+        }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
+
+    private void Refresh()
+    {
+        _ops = FleetOps.RecentOperations(50);
+        _vmNameByKube = Db.Vms.FindAll()
+            .Where(v => !string.IsNullOrEmpty(v.KubeVmName))
+            .GroupBy(v => v.KubeVmName, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().Name, StringComparer.Ordinal);
+    }
+
+    private void Toggle(Guid id)
+    {
+        if (!_expanded.Add(id)) _expanded.Remove(id);
+    }
+
+    private string VmNameFor(FleetOperationTarget t) =>
+        _vmNameByKube.TryGetValue(t.VmName, out var n) ? n : t.VmName;
+
+    private static bool IsTerminal(string phase) =>
+        phase is FleetOperationTargetPhase.Done
+            or FleetOperationTargetPhase.Failed
+            or FleetOperationTargetPhase.Abandoned;
+
+    private static Color PhaseColor(string phase) => phase switch
+    {
+        FleetOperationTargetPhase.Done => Color.Success,
+        FleetOperationTargetPhase.Running => Color.Info,
+        FleetOperationTargetPhase.Pending => Color.Default,
+        FleetOperationTargetPhase.Failed => Color.Error,
+        FleetOperationTargetPhase.Abandoned => Color.Warning,
+        _ => Color.Default
+    };
+
+    private static string MapPhaseToState(string phase) => phase switch
+    {
+        FleetOperationTargetPhase.Done => VmState.Running,
+        FleetOperationTargetPhase.Running => VmState.Starting,
+        FleetOperationTargetPhase.Failed => VmState.Failed,
+        _ => VmState.Creating
+    };
+
+    private static string Humanize(DateTime ts)
+    {
+        var delta = DateTime.UtcNow - ts;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
+    }
+
+    public void Dispose()
+    {
+        _subscription?.Dispose();
+        _tick?.Dispose();
+    }
+}

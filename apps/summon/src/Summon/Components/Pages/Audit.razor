@@ -1,0 +1,190 @@
+@page "/audit"
+@inject Summon.Services.Data.SummonDb Db
+@inject NavigationManager Nav
+
+<PageTitle>Summon — Audit log</PageTitle>
+
+<MudStack Spacing="0" Class="mb-4">
+    <MudText Typo="Typo.overline" Class="mud-text-secondary">AUDIT</MudText>
+    <MudText Typo="Typo.h5" Style="font-weight: 600; letter-spacing: -0.02em;">
+        @(_entries.Count == 0 ? "No activity" : $"{_total} events")
+    </MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        Everything Summon and its agents have done. Newest first.
+    </MudText>
+</MudStack>
+
+<MudStack Row Spacing="2" AlignItems="AlignItems.Center" Class="mb-4" Wrap="Wrap.Wrap">
+    <MudTextField T="string" Value="@_search" ValueChanged="OnSearchChanged"
+                  Placeholder="filter by action or VM" Variant="Variant.Outlined" Margin="Margin.Dense"
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Outlined.Search"
+                  Style="max-width: 320px;" />
+    <MudSelect T="string" Value="@_kindFilter" ValueChanged="OnKindChanged"
+               Label="Kind" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 180px;">
+        <MudSelectItem Value="@("all")">All</MudSelectItem>
+        <MudSelectItem Value="@("vm")">VM lifecycle</MudSelectItem>
+        <MudSelectItem Value="@("fleet")">Fleet ops</MudSelectItem>
+        <MudSelectItem Value="@("agent")">Agent reports</MudSelectItem>
+    </MudSelect>
+    <MudSpacer />
+    <MudText Typo="Typo.caption" Class="mud-text-secondary aegis-mono">
+        showing @_entries.Count / @_total
+    </MudText>
+</MudStack>
+
+@if (_entries.Count == 0)
+{
+    <MudPaper Elevation="0" Outlined Class="pa-8 rounded-lg" Style="text-align: center;">
+        <MudIcon Icon="@Icons.Material.Outlined.History" Size="Size.Large" Class="mb-3" Style="opacity: 0.3;" />
+        <MudText Typo="Typo.h6" Class="mb-2">Nothing to show</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Summon a VM or run a fleet operation to populate the audit log.
+        </MudText>
+    </MudPaper>
+}
+else
+{
+    <MudPaper Elevation="0" Outlined Class="rounded-lg" Style="overflow: hidden;">
+        @foreach (var entry in _entries)
+        {
+            var vmName = LookupVmName(entry.ResourceId);
+            <MudStack Row AlignItems="AlignItems.Start" Spacing="3" Class="px-4 py-3"
+                      Style="border-bottom: 1px solid var(--mud-palette-divider);">
+                <MudIcon Icon="@ActionIcon(entry.Action)" Size="Size.Small" Color="@ActionColor(entry.Action)"
+                         Style="margin-top: 3px;" />
+                <MudStack Spacing="0" Style="flex-grow: 1; min-width: 0;">
+                    <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2" Wrap="Wrap.Wrap">
+                        <Mono>@entry.Action</Mono>
+                        @if (vmName is not null)
+                        {
+                            <MudLink Href="@($"/vm/{entry.ResourceId}")" Underline="Underline.Hover">
+                                <Mono>@vmName</Mono>
+                            </MudLink>
+                        }
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">@Humanize(entry.Timestamp)</MudText>
+                    </MudStack>
+                    @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                    {
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary"
+                                 Style="white-space: pre-wrap; word-break: break-word;">
+                            @entry.Detail
+                        </MudText>
+                    }
+                </MudStack>
+                <Mono Class="mud-text-secondary" Style="font-size: 0.7rem; white-space: nowrap;">
+                    @entry.Timestamp.ToString("u")
+                </Mono>
+            </MudStack>
+        }
+    </MudPaper>
+
+    @if (_entries.Count < _total)
+    {
+        <div class="pa-4" style="text-align: center;">
+            <MudButton Variant="Variant.Text" OnClick="LoadMore">Load more</MudButton>
+        </div>
+    }
+}
+
+@code {
+    private List<AuditEntry> _entries = [];
+    private Dictionary<string, string> _vmNameById = new();
+    private string _search = string.Empty;
+    private string _kindFilter = "all";
+    private int _take = 100;
+    private int _total;
+
+    protected override void OnInitialized()
+    {
+        _vmNameById = Db.Vms.FindAll().ToDictionary(v => v.Id.ToString(), v => v.Name);
+        Refresh();
+    }
+
+    private void Refresh()
+    {
+        IEnumerable<AuditEntry> q = Db.Audit.FindAll().OrderByDescending(a => a.Timestamp);
+
+        if (_kindFilter != "all")
+        {
+            q = q.Where(a => a.Action.StartsWith(_kindFilter + ".", StringComparison.Ordinal));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var needle = _search.Trim();
+            q = q.Where(a =>
+                a.Action.Contains(needle, StringComparison.OrdinalIgnoreCase) ||
+                (a.Detail is not null && a.Detail.Contains(needle, StringComparison.OrdinalIgnoreCase)) ||
+                (_vmNameById.TryGetValue(a.ResourceId, out var name)
+                    && name.Contains(needle, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        var list = q.ToList();
+        _total = list.Count;
+        _entries = list.Take(_take).ToList();
+    }
+
+    private void OnSearchChanged(string value)
+    {
+        _search = value;
+        _take = 100;
+        Refresh();
+    }
+
+    private void OnKindChanged(string value)
+    {
+        _kindFilter = value;
+        _take = 100;
+        Refresh();
+    }
+
+    private void LoadMore()
+    {
+        _take += 100;
+        Refresh();
+    }
+
+    private string? LookupVmName(string resourceId) =>
+        _vmNameById.TryGetValue(resourceId, out var n) ? n : null;
+
+    private static string ActionIcon(string action) => action switch
+    {
+        "vm.summon" => Icons.Material.Outlined.AutoAwesome,
+        "vm.start" => Icons.Material.Outlined.PlayArrow,
+        "vm.stop" => Icons.Material.Outlined.Stop,
+        "vm.dismiss" => Icons.Material.Outlined.DeleteForever,
+        "vm.expired" => Icons.Material.Outlined.Schedule,
+        var a when a.StartsWith("fleet.", StringComparison.Ordinal) => Icons.Material.Outlined.Bolt,
+        var a when a.StartsWith("agent.install.done", StringComparison.Ordinal) => Icons.Material.Outlined.Inventory2,
+        var a when a.StartsWith("agent.install.progress", StringComparison.Ordinal) => Icons.Material.Outlined.Sync,
+        var a when a.StartsWith("agent.inventory", StringComparison.Ordinal) => Icons.Material.Outlined.ViewList,
+        var a when a.StartsWith("agent.exec", StringComparison.Ordinal) => Icons.Material.Outlined.Terminal,
+        var a when a.StartsWith("agent.upgrade", StringComparison.Ordinal) => Icons.Material.Outlined.Upgrade,
+        var a when a.StartsWith("agent.uninstall", StringComparison.Ordinal) => Icons.Material.Outlined.RemoveCircleOutline,
+        var a when a.StartsWith("agent.", StringComparison.Ordinal) => Icons.Material.Outlined.Sensors,
+        _ => Icons.Material.Outlined.Circle
+    };
+
+    private static Color ActionColor(string action) => action switch
+    {
+        "vm.summon" => Color.Primary,
+        "vm.start" => Color.Success,
+        "vm.stop" => Color.Warning,
+        "vm.dismiss" => Color.Error,
+        "vm.expired" => Color.Warning,
+        var a when a.StartsWith("fleet.", StringComparison.Ordinal) => Color.Info,
+        var a when a.Contains("install.done") => Color.Success,
+        var a when a.Contains("install.progress") => Color.Info,
+        var a when a.Contains(".failed") => Color.Error,
+        _ => Color.Default
+    };
+
+    private static string Humanize(DateTime ts)
+    {
+        var delta = DateTime.UtcNow - ts;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
+    }
+}

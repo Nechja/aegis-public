@@ -1,0 +1,37 @@
+@namespace Summon.Components.Atoms
+
+<MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="@Class">
+    <MudStack Row AlignItems="AlignItems.Center" Spacing="3" Class="flex-grow-1">
+        @if (Lead is not null)
+        {
+            @Lead
+        }
+        <MudStack Spacing="0">
+            <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+                <MudText Typo="@TitleTypo">@Title</MudText>
+                @if (!string.IsNullOrWhiteSpace(Subtitle))
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@Subtitle</MudText>
+                }
+            </MudStack>
+            @if (!string.IsNullOrWhiteSpace(Caption))
+            {
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">@Caption</MudText>
+            }
+        </MudStack>
+    </MudStack>
+    @if (End is not null)
+    {
+        @End
+    }
+</MudStack>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string? Caption { get; set; }
+    [Parameter] public Typo TitleTypo { get; set; } = Typo.body2;
+    [Parameter] public RenderFragment? Lead { get; set; }
+    [Parameter] public RenderFragment? End { get; set; }
+    [Parameter] public string Class { get; set; } = "";
+}

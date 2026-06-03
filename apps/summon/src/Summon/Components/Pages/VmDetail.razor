@@ -1,0 +1,761 @@
+@page "/vm/{Id:guid}"
+@implements IDisposable
+@inject Summon.Services.Data.SummonDb Db
+@inject Summon.Services.KubeVirtService KubeVirt
+@inject Summon.Services.AgentMessaging Agent
+@inject Summon.Services.VmStateNotifier Notifier
+@inject Summon.Services.FleetOperationService FleetOps
+@inject IConfiguration Config
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<PageTitle>Summon — @(_vm?.Name ?? "not found")</PageTitle>
+
+@if (_vm is null)
+{
+    <MudPaper Elevation="0" Outlined Class="pa-6 rounded-lg">
+        <MudText Typo="Typo.h6">VM not found</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
+            It may have been dismissed. Head back to the fleet.
+        </MudText>
+        <MudButton Href="/" Variant="Variant.Outlined" StartIcon="@Icons.Material.Outlined.ArrowBack">
+            Back to fleet
+        </MudButton>
+    </MudPaper>
+}
+else
+{
+    <MudStack Spacing="4">
+        <!-- Header strip -->
+        <MudStack Spacing="3">
+            <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                <MudLink Href="/" Underline="Underline.None" Class="mud-text-secondary" Style="font-size: 0.8rem;">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="1">
+                        <MudIcon Icon="@Icons.Material.Outlined.ArrowBack" Size="Size.Small" />
+                        <span>fleet</span>
+                    </MudStack>
+                </MudLink>
+            </MudStack>
+
+            <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween">
+                <MudStack Row AlignItems="AlignItems.Center" Spacing="3">
+                    <StateDot State="@_vm.State" Size="14" />
+                    <MudStack Spacing="0">
+                        <Mono Class="aegis-mono" Size=""><span style="font-size: 1.8rem; font-weight: 500; letter-spacing: -0.02em;">@_vm.Name</span></Mono>
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.08em; text-transform: uppercase;">
+                                @_vm.State
+                            </MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">·</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                @_vm.TemplateName · @_vm.InstanceType
+                            </MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">·</MudText>
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                summoned @Humanize(_vm.CreatedAt)
+                            </MudText>
+                        </MudStack>
+                    </MudStack>
+                </MudStack>
+
+                <MudStack Row Spacing="1">
+                    @if (_vm.State is VmState.Running)
+                    {
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Stop"
+                                   OnClick="Stop" Disabled="_busy">Stop</MudButton>
+                    }
+                    @if (_vm.State is VmState.Stopped)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.PlayArrow"
+                                   OnClick="Start" Disabled="_busy">Start</MudButton>
+                    }
+                    <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Small"
+                               StartIcon="@Icons.Material.Outlined.DeleteForever"
+                               OnClick="Dismiss" Disabled="_busy">Dismiss</MudButton>
+                </MudStack>
+            </MudStack>
+
+            @if (_vm.State is VmState.Importing)
+            {
+                <MudProgressLinear Color="Color.Warning" Indeterminate />
+            }
+            @if (_vm.State is VmState.Starting or VmState.Creating)
+            {
+                <MudProgressLinear Color="Color.Info" Indeterminate />
+            }
+        </MudStack>
+
+        <!-- Quick info grid -->
+        <MudGrid Spacing="2">
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg">
+                    <CopyableField Label="SSH"
+                                   Icon="@Icons.Material.Outlined.Terminal"
+                                   Value="@SshCommand()" />
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg">
+                    <CopyableField Label="Tailscale"
+                                   Icon="@Icons.Material.Outlined.Link"
+                                   Value="@($"{_vm.TailscaleHostname}.{_tailscaleDomain}")" />
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg">
+                    <CopyableField Label="k8s resource"
+                                   Icon="@Icons.Material.Outlined.Hub"
+                                   Value="@($"{_vm.KubeNamespace}/{_vm.KubeVmName}")" />
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" md="6">
+                <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg">
+                    <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                        <MudIcon Icon="@Icons.Material.Outlined.Schedule" Size="Size.Small" Color="Color.Default" />
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.06em; text-transform: uppercase;">Expires</MudText>
+                            <Mono>@(_vm.ExpiresAt?.ToString("u") ?? "never")</Mono>
+                        </MudStack>
+                    </MudStack>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        <!-- Tabs -->
+        <MudTabs Elevation="0" Rounded ApplyEffectsToContainer
+                 Outlined="true" Class="rounded-lg pa-2">
+            <MudTabPanel Text="Overview" Icon="@Icons.Material.Outlined.Info">
+                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.subtitle2">System</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                            @FactsCaption()
+                        </MudText>
+                    </MudStack>
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                               StartIcon="@Icons.Material.Outlined.Speed"
+                               OnClick="ProbeFacts" Disabled="@(_factsBusy || _vm.State != VmState.Running)">
+                        Probe
+                    </MudButton>
+                </MudStack>
+
+                @if (_vm.Telemetry is { } tel)
+                {
+                    <MudGrid Spacing="2" Class="mb-4">
+                        <MudItem xs="6" md="3">
+                            <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg">
+                                <MudText Typo="Typo.overline" Class="mud-text-secondary">CPU</MudText>
+                                <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+                                    <Mono><span style="font-size: 1.25rem; font-weight: 500;">@tel.CpuPercent.ToString("F0")%</span></Mono>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                        @tel.CpuCount core@(tel.CpuCount == 1 ? "" : "s") · load @tel.LoadAvg1.ToString("F2")
+                                    </MudText>
+                                </MudStack>
+                                <MudProgressLinear Value="@tel.CpuPercent" Color="@PercentColor(tel.CpuPercent)" Class="mt-2" Rounded />
+                            </MudPaper>
+                        </MudItem>
+                        <MudItem xs="6" md="3">
+                            <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg">
+                                <MudText Typo="Typo.overline" Class="mud-text-secondary">Memory</MudText>
+                                <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+                                    <Mono><span style="font-size: 1.25rem; font-weight: 500;">@tel.MemPercent.ToString("F0")%</span></Mono>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                        @FormatKB(tel.MemUsedKb) / @FormatKB(tel.MemTotalKb)
+                                    </MudText>
+                                </MudStack>
+                                <MudProgressLinear Value="@tel.MemPercent" Color="@PercentColor(tel.MemPercent)" Class="mt-2" Rounded />
+                            </MudPaper>
+                        </MudItem>
+                        <MudItem xs="6" md="3">
+                            <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg">
+                                <MudText Typo="Typo.overline" Class="mud-text-secondary">Disk (/)</MudText>
+                                <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+                                    <Mono><span style="font-size: 1.25rem; font-weight: 500;">@tel.DiskPercent.ToString("F0")%</span></Mono>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                        @FormatKB(tel.DiskUsedKb) / @FormatKB(tel.DiskTotalKb)
+                                    </MudText>
+                                </MudStack>
+                                <MudProgressLinear Value="@tel.DiskPercent" Color="@PercentColor(tel.DiskPercent)" Class="mt-2" Rounded />
+                            </MudPaper>
+                        </MudItem>
+                        <MudItem xs="6" md="3">
+                            <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg">
+                                <MudText Typo="Typo.overline" Class="mud-text-secondary">Uptime</MudText>
+                                <Mono><span style="font-size: 1.25rem; font-weight: 500;">@HumanizeUptime(tel.UptimeSec)</span></Mono>
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                    agent @(tel.AgentVersion ?? "—")
+                                </MudText>
+                            </MudPaper>
+                        </MudItem>
+                    </MudGrid>
+                    <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg mb-4">
+                        <MudStack Row AlignItems="AlignItems.Center" Spacing="4" Wrap="Wrap.Wrap">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.06em; text-transform: uppercase;">OS</MudText>
+                                <Mono>@(tel.OsPretty ?? "—")</Mono>
+                            </MudStack>
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.06em; text-transform: uppercase;">Kernel</MudText>
+                                <Mono>@(tel.Kernel ?? "—")</Mono>
+                            </MudStack>
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.06em; text-transform: uppercase;">Primary IP</MudText>
+                                <Mono>@(tel.PrimaryIp ?? "—")</Mono>
+                            </MudStack>
+                        </MudStack>
+                    </MudPaper>
+                }
+                else
+                {
+                    <MudPaper Elevation="0" Outlined Class="pa-4 rounded-lg mb-4" Style="text-align: center;">
+                        <MudIcon Icon="@Icons.Material.Outlined.Speed" Size="Size.Medium" Style="opacity: 0.3;" />
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                            No facts yet. @(_vm.State == VmState.Running ? "Probe the agent to pull CPU / memory / disk / uptime." : "VM must be running to probe.")
+                        </MudText>
+                    </MudPaper>
+                }
+
+                <MudSimpleTable Dense Class="rounded">
+                    <tbody>
+                        <tr>
+                            <td style="width: 180px;"><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.08em; text-transform: uppercase;">Template</MudText></td>
+                            <td>@_vm.TemplateName</td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.08em; text-transform: uppercase;">OS family</MudText></td>
+                            <td>@OsFamilyLabel(_vm.OsFamily ?? TemplateOsFamilies.Linux)</td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.08em; text-transform: uppercase;">Size · arch</MudText></td>
+                            <td><Mono>@_vm.InstanceType · @_vm.Arch</Mono></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.08em; text-transform: uppercase;">Tailscale IP</MudText></td>
+                            <td><Mono>@(string.IsNullOrWhiteSpace(_vm.TailscaleIp) ? "— (waiting)" : _vm.TailscaleIp)</Mono></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.08em; text-transform: uppercase;">Created</MudText></td>
+                            <td><Mono>@_vm.CreatedAt.ToString("u")</Mono></td>
+                        </tr>
+                        <tr>
+                            <td><MudText Typo="Typo.caption" Class="mud-text-secondary" Style="letter-spacing: 0.08em; text-transform: uppercase;">Software</MudText></td>
+                            <td>@SoftwareSummary()</td>
+                        </tr>
+                    </tbody>
+                </MudSimpleTable>
+            </MudTabPanel>
+            <MudTabPanel Text="@($"Installs ({InstallCount()})")" Icon="@Icons.Material.Outlined.Inventory2">
+                @if (_vm.SoftwareInstalls is { Count: > 0 } installs)
+                {
+                    <MudTable Items="@installs.OrderBy(x => x.DisplayName).ToList()" Dense Hover Breakpoint="Breakpoint.Sm" Elevation="0">
+                        <HeaderContent>
+                            <MudTh>Package</MudTh>
+                            <MudTh>Phase</MudTh>
+                            <MudTh>Exit</MudTh>
+                            <MudTh>Updated</MudTh>
+                            <MudTh>Output</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Package">
+                                <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                                    <MudIcon Icon="@PhaseIcon(context.Phase)" Size="Size.Small" Color="@PhaseColor(context.Phase)" />
+                                    <MudStack Spacing="0">
+                                        <MudText Typo="Typo.body2">@context.DisplayName</MudText>
+                                        <Mono Class="mud-text-secondary" Size="">@context.PackageKey</Mono>
+                                    </MudStack>
+                                </MudStack>
+                            </MudTd>
+                            <MudTd DataLabel="Phase">
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@PhaseColor(context.Phase)">
+                                    @context.Phase
+                                </MudChip>
+                            </MudTd>
+                            <MudTd DataLabel="Exit">
+                                <Mono>@(context.ExitCode?.ToString() ?? "—")</Mono>
+                            </MudTd>
+                            <MudTd DataLabel="Updated">
+                                <Mono Class="mud-text-secondary">@(context.UpdatedAt is { } u ? Humanize(u) : "—")</Mono>
+                            </MudTd>
+                            <MudTd DataLabel="Output">
+                                @if (!string.IsNullOrWhiteSpace(context.LastOutput))
+                                {
+                                    <MudExpansionPanels Elevation="0">
+                                        <MudExpansionPanel>
+                                            <TitleContent>
+                                                <MudText Typo="Typo.caption" Class="mud-text-secondary">view log</MudText>
+                                            </TitleContent>
+                                            <ChildContent>
+                                                <pre class="aegis-mono" style="white-space: pre-wrap; font-size: 0.78rem; margin: 0; max-height: 20rem; overflow: auto; background: var(--mud-palette-background); padding: 8px; border-radius: 6px;">@context.LastOutput</pre>
+                                            </ChildContent>
+                                        </MudExpansionPanel>
+                                    </MudExpansionPanels>
+                                }
+                                else
+                                {
+                                    <span class="mud-text-secondary">—</span>
+                                }
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        No software installs recorded. @(_vm.Packages.Count > 0 ? $"Requested: {string.Join(", ", _vm.Packages)}" : "None were requested at summon time.")
+                    </MudText>
+                }
+            </MudTabPanel>
+            <MudTabPanel Text="@AppsLabel()" Icon="@Icons.Material.Outlined.Apps" Disabled="@IsWindowsVm()">
+                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.subtitle2">Installed apps</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                            @(_vm.InstalledAppsCapturedAt is { } at ? $"captured {Humanize(at)}" : "no capture yet")
+                        </MudText>
+                    </MudStack>
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                               StartIcon="@Icons.Material.Outlined.Refresh"
+                               OnClick="RefreshApps" Disabled="@(_appsBusy || _vm.State != VmState.Running)">
+                        Refresh
+                    </MudButton>
+                </MudStack>
+                @if (_vm.InstalledApps is { Count: > 0 } apps)
+                {
+                    <MudTable Items="@apps" Dense Hover Breakpoint="Breakpoint.Sm" Elevation="0">
+                        <HeaderContent>
+                            <MudTh Style="width: 6rem;"><MudTableSortLabel SortBy="new Func<InstalledApp, object>(x => x.Source)">Source</MudTableSortLabel></MudTh>
+                            <MudTh><MudTableSortLabel InitialDirection="SortDirection.Ascending" SortBy="new Func<InstalledApp, object>(x => x.Name)">Name</MudTableSortLabel></MudTh>
+                            <MudTh><MudTableSortLabel SortBy="new Func<InstalledApp, object>(x => x.Version)">Version</MudTableSortLabel></MudTh>
+                            <MudTh Style="width: 3rem;"></MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd DataLabel="Source"><SourceBadge Source="@context.Source" Kind="SourceBadge.BadgeKind.IconLabel" /></MudTd>
+                            <MudTd DataLabel="Name"><Mono>@context.Name</Mono></MudTd>
+                            <MudTd DataLabel="Version"><Mono Class="mud-text-secondary">@context.Version</Mono></MudTd>
+                            <MudTd>
+                                <MudIconButton Icon="@Icons.Material.Outlined.Delete" Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => UninstallOne(context))"
+                                               Disabled="@(_vm.State != VmState.Running)" />
+                            </MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+                else
+                {
+                    <MudPaper Elevation="0" Outlined Class="pa-6 rounded-lg" Style="text-align: center;">
+                        <MudIcon Icon="@Icons.Material.Outlined.Apps" Size="Size.Large" Style="opacity: 0.3;" Class="mb-2" />
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+                            No apps reported yet.
+                        </MudText>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Refresh"
+                                   OnClick="RefreshApps" Disabled="@(_appsBusy || _vm.State != VmState.Running)">
+                            Refresh
+                        </MudButton>
+                    </MudPaper>
+                }
+            </MudTabPanel>
+            <MudTabPanel Text="@InventoryLabel()" Icon="@Icons.Material.Outlined.ViewList" Disabled="@IsWindowsVm()">
+                <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Class="mb-3">
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.body2">APT &amp; Snap on guest</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                            @(_vm.PackageManagerSnapshotAt is { } at ? $"captured {Humanize(at)}" : "no capture yet")@(_vm.LastIndexRefreshedAt is { } at2 ? $" · index refreshed {Humanize(at2)}" : "")
+                        </MudText>
+                    </MudStack>
+                    <MudStack Row Spacing="1">
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.Refresh"
+                                   OnClick="RefreshInventory" Disabled="_inventoryBusy || _vm.State != VmState.Running">
+                            Probe
+                        </MudButton>
+                        <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                                   StartIcon="@Icons.Material.Outlined.CloudDownload"
+                                   OnClick="RefreshInventoryFull" Disabled="_inventoryBusy || _vm.State != VmState.Running">
+                            Refresh index
+                        </MudButton>
+                    </MudStack>
+                </MudStack>
+                @if ((_vm.PendingAptUpdates ?? 0) + (_vm.PendingSnapRefreshes ?? 0) > 0)
+                {
+                    var apt = _vm.PendingAptUpdates ?? 0;
+                    var sec = _vm.PendingSecurityUpdates ?? 0;
+                    var snap = _vm.PendingSnapRefreshes ?? 0;
+                    <MudPaper Elevation="0" Outlined Class="pa-3 rounded-lg mb-3" Style="@(sec > 0 ? "border-color: var(--mud-palette-error);" : "border-color: var(--mud-palette-warning);")">
+                        <MudStack Row AlignItems="AlignItems.Center" Justify="Justify.SpaceBetween" Spacing="3">
+                            <MudStack Row AlignItems="AlignItems.Center" Spacing="2">
+                                <MudIcon Icon="@Icons.Material.Outlined.SystemUpdate" Color="@(sec > 0 ? Color.Error : Color.Warning)" />
+                                <MudStack Spacing="0">
+                                    <MudText Typo="Typo.body2">
+                                        @(apt + snap) update@(apt + snap == 1 ? "" : "s") available@(sec > 0 ? $" · {sec} security" : "")
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                                        @apt apt · @snap snap
+                                    </MudText>
+                                </MudStack>
+                            </MudStack>
+                            <MudButton Variant="Variant.Filled" Color="@(sec > 0 ? Color.Error : Color.Warning)" Size="Size.Small"
+                                       StartIcon="@Icons.Material.Outlined.Upgrade"
+                                       OnClick="UpgradeNow" Disabled="@(_busy || _vm.State != VmState.Running)">
+                                Upgrade now
+                            </MudButton>
+                        </MudStack>
+                    </MudPaper>
+                }
+                @if (!string.IsNullOrWhiteSpace(_vm.PackageManagerSnapshot))
+                {
+                    <pre class="aegis-mono" style="white-space: pre-wrap; font-size: 0.78rem; margin: 0; max-height: 28rem; overflow: auto; background: var(--mud-palette-background); padding: 12px; border-radius: 6px; border: 1px solid var(--mud-palette-divider);">@_vm.PackageManagerSnapshot</pre>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                        Tap <strong>Probe</strong> once the agent is online to pull <code class="aegis-mono">apt list --upgradable</code> and <code class="aegis-mono">snap list</code>.
+                    </MudText>
+                }
+            </MudTabPanel>
+            <MudTabPanel Text="@($"Activity ({_audit.Count})")" Icon="@Icons.Material.Outlined.History">
+                @if (_audit.Count == 0)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">No activity yet.</MudText>
+                }
+                else
+                {
+                    <MudStack Spacing="0">
+                        @foreach (var entry in _audit)
+                        {
+                            <MudStack Row AlignItems="AlignItems.Start" Spacing="3" Class="py-2"
+                                      Style="border-bottom: 1px solid var(--mud-palette-divider);">
+                                <MudIcon Icon="@ActionIcon(entry.Action)" Size="Size.Small" Color="@ActionColor(entry.Action)" Style="margin-top: 2px;" />
+                                <MudStack Spacing="0" Class="flex-grow-1">
+                                    <MudStack Row AlignItems="AlignItems.Baseline" Spacing="2">
+                                        <Mono>@entry.Action</Mono>
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">@Humanize(entry.Timestamp)</MudText>
+                                    </MudStack>
+                                    @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                                    {
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">@entry.Detail</MudText>
+                                    }
+                                </MudStack>
+                                <Mono Class="mud-text-secondary" Size="">@entry.Timestamp.ToString("u")</Mono>
+                            </MudStack>
+                        }
+                    </MudStack>
+                }
+            </MudTabPanel>
+        </MudTabs>
+    </MudStack>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private VmRecord? _vm;
+    private List<AuditEntry> _audit = [];
+    private string _tailscaleDomain = string.Empty;
+    private bool _busy;
+    private bool _inventoryBusy;
+    private bool _factsBusy;
+    private bool _appsBusy;
+    private IDisposable? _subscription;
+
+    protected override void OnInitialized()
+    {
+        _tailscaleDomain = Config["TAILSCALE_DOMAIN"] ?? "example.ts.net";
+        Load();
+
+        _subscription = Notifier.Subscribe(evt =>
+        {
+            if (evt.VmId != Id) return Task.CompletedTask;
+            Load();
+            return InvokeAsync(StateHasChanged);
+        });
+    }
+
+    private void Load()
+    {
+        _vm = Db.Vms.FindById(Id);
+        var key = Id.ToString();
+        _audit = Db.Audit
+            .Find(a => a.ResourceId == key)
+            .OrderByDescending(a => a.Timestamp)
+            .Take(50)
+            .ToList();
+    }
+
+    private int InstallCount() => _vm?.SoftwareInstalls?.Count ?? _vm?.Packages.Count ?? 0;
+
+    private bool IsWindowsVm() =>
+        string.Equals(_vm?.OsFamily ?? TemplateOsFamilies.Linux, TemplateOsFamilies.Windows,
+            StringComparison.OrdinalIgnoreCase);
+
+    private string SshCommand()
+    {
+        if (_vm is null) return "";
+        if (IsWindowsVm()) return "Windows — use RDP / WinRM";
+        return $"ssh -i ~/.ssh/summon_aegis aegis@{_vm.TailscaleHostname}.{_tailscaleDomain}";
+    }
+
+    private async Task RefreshInventory()
+    {
+        if (_vm is null) return;
+        _inventoryBusy = true;
+        try
+        {
+            await Agent.SendInventoryProbe(_vm.KubeVmName);
+            Snackbar.Add("Probe requested", Severity.Info);
+        }
+        finally { _inventoryBusy = false; }
+    }
+
+    private async Task RefreshInventoryFull()
+    {
+        if (_vm is null) return;
+        _inventoryBusy = true;
+        try
+        {
+            await Agent.SendInventoryRefresh(_vm.KubeVmName);
+            Snackbar.Add("Index refresh requested (apt-get update)", Severity.Info);
+        }
+        finally { _inventoryBusy = false; }
+    }
+
+    private async Task UpgradeNow()
+    {
+        if (_vm is null) return;
+        try
+        {
+            await FleetOps.StartUpgrade([_vm.Id]);
+            Snackbar.Add("Upgrade queued", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Upgrade failed to start: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string InventoryLabel()
+    {
+        var n = (_vm?.PendingAptUpdates ?? 0) + (_vm?.PendingSnapRefreshes ?? 0);
+        return n > 0 ? $"Inventory ({n} ↑)" : "Inventory";
+    }
+
+    private async Task ProbeFacts()
+    {
+        if (_vm is null) return;
+        _factsBusy = true;
+        try
+        {
+            await Agent.SendFactsProbe(_vm.KubeVmName);
+            Snackbar.Add("Facts probe sent", Severity.Info);
+        }
+        finally { _factsBusy = false; }
+    }
+
+    private string AppsLabel()
+    {
+        var count = _vm?.InstalledApps?.Count ?? 0;
+        return count > 0 ? $"Apps ({count})" : "Apps";
+    }
+
+    private async Task RefreshApps()
+    {
+        if (_vm is null) return;
+        _appsBusy = true;
+        try
+        {
+            await FleetOps.StartRefreshApps([_vm.Id]);
+            Snackbar.Add("Refresh requested", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Refresh failed: {ex.Message}", Severity.Error);
+        }
+        finally { _appsBusy = false; }
+    }
+
+    private async Task UninstallOne(InstalledApp app)
+    {
+        if (_vm is null) return;
+        var confirmed = await DialogService.ShowMessageBoxAsync(
+            "Remove package?",
+            $"Uninstall {app.Name} ({app.Source}) from {_vm.Name}?",
+            yesText: "Remove", cancelText: "Cancel");
+        if (confirmed != true) return;
+
+        var script = app.Source switch
+        {
+            PackageLinuxSource.Snap => $"snap remove {app.Name}",
+            _ => $"export DEBIAN_FRONTEND=noninteractive && apt-get remove -y {app.Name}"
+        };
+        var item = new InstallCommandItem($"{app.Source}:{app.Name}", app.Name, script);
+        var dict = new Dictionary<Guid, IReadOnlyList<InstallCommandItem>>
+        {
+            [_vm.Id] = new[] { item }
+        };
+        try
+        {
+            await FleetOps.StartUninstall([_vm.Id], dict);
+            Snackbar.Add($"Uninstall queued for {app.Name}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Uninstall failed: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private string FactsCaption()
+    {
+        if (_vm?.Telemetry is { } t) return $"captured {Humanize(t.CapturedAt)}";
+        if (_vm?.AgentVersion is { } v) return $"agent {v} ready, no facts yet";
+        return "no facts yet";
+    }
+
+    private static Color PercentColor(double p) =>
+        p >= 90 ? Color.Error : p >= 70 ? Color.Warning : Color.Success;
+
+    private static string FormatKB(long kb)
+    {
+        if (kb <= 0) return "—";
+        if (kb < 1024) return $"{kb} KB";
+        double mb = kb / 1024.0;
+        if (mb < 1024) return $"{mb:F1} MB";
+        double gb = mb / 1024.0;
+        if (gb < 1024) return $"{gb:F1} GB";
+        return $"{gb / 1024.0:F2} TB";
+    }
+
+    private static string HumanizeUptime(long seconds)
+    {
+        if (seconds <= 0) return "—";
+        var ts = TimeSpan.FromSeconds(seconds);
+        if (ts.TotalDays >= 1) return $"{(int)ts.TotalDays}d {ts.Hours}h";
+        if (ts.TotalHours >= 1) return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+        if (ts.TotalMinutes >= 1) return $"{(int)ts.TotalMinutes}m";
+        return $"{ts.Seconds}s";
+    }
+
+    private async Task Stop()
+    {
+        if (_vm is null) return;
+        _busy = true;
+        if (await KubeVirt.Stop(_vm))
+        {
+            _vm.State = VmState.Stopped;
+            Db.Vms.Update(_vm);
+            Db.Audit.Insert(new AuditEntry { Action = "vm.stop", ResourceId = _vm.Id.ToString(), Detail = $"Stopped {_vm.Name}" });
+            Snackbar.Add("Stopped", Severity.Info);
+            Load();
+        }
+        else Snackbar.Add("Failed to stop", Severity.Error);
+        _busy = false;
+    }
+
+    private async Task Start()
+    {
+        if (_vm is null) return;
+        _busy = true;
+        if (await KubeVirt.Start(_vm))
+        {
+            _vm.State = VmState.Starting;
+            Db.Vms.Update(_vm);
+            Db.Audit.Insert(new AuditEntry { Action = "vm.start", ResourceId = _vm.Id.ToString(), Detail = $"Starting {_vm.Name}" });
+            Snackbar.Add("Starting...", Severity.Success);
+            Load();
+        }
+        else Snackbar.Add("Failed to start", Severity.Error);
+        _busy = false;
+    }
+
+    private async Task Dismiss()
+    {
+        if (_vm is null) return;
+        _busy = true;
+        _vm.State = VmState.Deleting;
+        Db.Vms.Update(_vm);
+        StateHasChanged();
+        if (await KubeVirt.Delete(_vm))
+        {
+            Db.Vms.Delete(_vm.Id);
+            Db.Audit.Insert(new AuditEntry { Action = "vm.dismiss", ResourceId = _vm.Id.ToString(), Detail = $"Dismissed {_vm.Name}" });
+            Snackbar.Add($"Dismissed {_vm.Name}", Severity.Warning);
+            Nav.NavigateTo("/");
+        }
+        else
+        {
+            Snackbar.Add("Failed to dismiss — some resources may remain", Severity.Error);
+            _busy = false;
+        }
+    }
+
+    private static Color PhaseColor(string phase) => phase switch
+    {
+        PackageInstallPhase.Installed => Color.Success,
+        PackageInstallPhase.Failed => Color.Error,
+        PackageInstallPhase.Installing => Color.Info,
+        _ => Color.Default
+    };
+
+    private static string PhaseIcon(string phase) => phase switch
+    {
+        PackageInstallPhase.Installed => Icons.Material.Outlined.CheckCircle,
+        PackageInstallPhase.Failed => Icons.Material.Outlined.ErrorOutline,
+        PackageInstallPhase.Installing => Icons.Material.Outlined.Sync,
+        _ => Icons.Material.Outlined.HourglassEmpty
+    };
+
+    private static string ActionIcon(string action) => action switch
+    {
+        "vm.summon" => Icons.Material.Outlined.AutoAwesome,
+        "vm.start" => Icons.Material.Outlined.PlayArrow,
+        "vm.stop" => Icons.Material.Outlined.Stop,
+        "vm.dismiss" => Icons.Material.Outlined.DeleteForever,
+        var a when a.StartsWith("agent.install.done", StringComparison.Ordinal) => Icons.Material.Outlined.Inventory2,
+        var a when a.StartsWith("agent.install.progress", StringComparison.Ordinal) => Icons.Material.Outlined.Sync,
+        var a when a.StartsWith("agent.inventory", StringComparison.Ordinal) => Icons.Material.Outlined.ViewList,
+        var a when a.StartsWith("agent.exec", StringComparison.Ordinal) => Icons.Material.Outlined.Terminal,
+        var a when a.StartsWith("agent.", StringComparison.Ordinal) => Icons.Material.Outlined.Sensors,
+        _ => Icons.Material.Outlined.Circle
+    };
+
+    private static Color ActionColor(string action) => action switch
+    {
+        "vm.summon" => Color.Primary,
+        "vm.start" => Color.Success,
+        "vm.stop" => Color.Warning,
+        "vm.dismiss" => Color.Error,
+        var a when a.Contains("install.done") => Color.Success,
+        var a when a.Contains("install.progress") => Color.Info,
+        _ => Color.Default
+    };
+
+    private string SoftwareSummary()
+    {
+        if (_vm is null) return "";
+        if (_vm.SoftwareInstalls is { Count: > 0 } list)
+        {
+            var ok = list.Count(x => x.Phase == PackageInstallPhase.Installed);
+            var failed = list.Count(x => x.Phase == PackageInstallPhase.Failed);
+            var pending = list.Count(x => x.Phase is PackageInstallPhase.Pending or PackageInstallPhase.Installing);
+            return $"{ok}/{list.Count} installed · {pending} in progress" + (failed > 0 ? $" · {failed} failed" : "");
+        }
+        return _vm.Packages.Count == 0 ? "none" : string.Join(" · ", _vm.Packages);
+    }
+
+    private static string OsFamilyLabel(string family) =>
+        string.Equals(family, TemplateOsFamilies.Windows, StringComparison.OrdinalIgnoreCase) ? "Windows" : "Linux";
+
+    private static string Humanize(DateTime ts)
+    {
+        var delta = DateTime.UtcNow - ts;
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+        return $"{(int)delta.TotalDays}d ago";
+    }
+
+    public void Dispose() => _subscription?.Dispose();
+}
