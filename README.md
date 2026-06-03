@@ -91,17 +91,6 @@ flowchart LR
   APP -->|categorize / cheer| OL
 ```
 
----
-
-## Recurring themes
-
-Common patterns across these applications:
-
-- **Push, don't poll.** SignalR and WebSockets everywhere, so the UI reflects state changes without polling.
-- **Keep the hot path off the slow dependency.** The dashboard reads a Redis snapshot, not the live k8s API. Glist uses a lookup table before model fallback.
-- **Dumb edges, smart core.** The VM agent and the frontends hold no policy; controllers and APIs own orchestration logic.
-- **Everything is configured by environment.** No hosts or secrets are baked into the code.
-
 ## License
 
 Source-available, all rights reserved (see [LICENSE](./LICENSE)). You're very welcome to read and learn from this. Please ask before redistributing or running it as a service.
